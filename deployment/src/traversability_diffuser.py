@@ -52,8 +52,6 @@ MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
 
 VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
-VIZ_IMAGE_SIZE_TRAV = (224, 224)
-
 
 
 # TODO 
@@ -115,10 +113,6 @@ def _load_topomap(dir_path: str, goal_node: int) -> Tuple[List[PILImage.Image], 
     return topomap, goal_node
 
 
-
-# VISUALIZATION
-
-
 def project_points(
     xy: np.ndarray,
     camera_height: float,
@@ -162,6 +156,7 @@ def project_points(
     
     return uv
 
+
 def get_pos_pixels(
     points: np.ndarray,
     camera_height: float,
@@ -182,6 +177,78 @@ def get_pos_pixels(
 
     return pixels
 
+
+def _get_traj_pixels_coords(
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    list_trajs: list,
+    viz_img_size: Tuple[int, int],
+    resize_factor:bool=True):
+    
+    traj_pix_coords = []
+   
+    camera_height = 0.25
+    camera_x_offset = 0.10
+
+    for traj in list_trajs:
+        xy_coords = traj[:, :2]
+        traj_pixels = get_pos_pixels(
+            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
+        )
+        
+        if resize_factor: # Traversability image is 224 x 224 and the original fisheye image is 640 x 480
+            traj_pixels[:,0] *= .35
+            traj_pixels[:,1] *= .46
+
+        points = traj_pixels.astype(int).reshape(-1, 1, 2)
+
+        # inverting x,y axis so origin in image is down-left corner
+        if resize_factor:
+            points[:, :, 1] = viz_img_size[1] * .46  - 1 - points[:, :, 1]
+        else:
+            points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
+
+        # Draw trajectory
+        traj_pix_coords.append(points)
+
+    return traj_pix_coords
+
+
+def _select_traj_best_traversability(
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    list_trajs: list,
+    viz_img_size: Tuple[int, int],
+    resize_factor:bool=True
+):
+    """
+    Select the trajectory with the best traversability score.
+    """
+    # TODO there might be a cleaner way to do this
+    if trav_img is None:
+        return None, None
+    
+    traj_pix_coords = _get_traj_pixels_coords(
+        camera_matrix, dist_coeffs, list_trajs, viz_img_size, resize_factor=resize_factor
+    )
+
+    best_traj = None
+    best_score = -np.inf
+
+    for traj, pix_coords in zip(list_trajs, traj_pix_coords):
+        score = 0.0
+        for point in pix_coords:
+            x, y = point[0]
+            score += trav_img[y, x] 
+        rospy.logdebug(f"Trajectory score: {score}")
+        if score > best_score:
+            best_score = score
+            best_traj = traj
+
+    return best_traj, best_score
+
+
+# TODO SEE IF YOU CAN CONDENSE CODE REFCTOR 
 def plot_trajs_and_points_on_image(
     img: np.ndarray,
     camera_matrix: np.ndarray,
@@ -195,49 +262,22 @@ def plot_trajs_and_points_on_image(
     resize_factor: if True resize the image to viz_img_size. This is needed due to the fact that orginal image coming from fisheye is 640 x 480 and the traversability image is 224 x 224.
     Thus the camera matrix needs to be scaled accordingly.
     """
+    # TODO this has to be in yaml config
     camera_height = 0.25
     camera_x_offset = 0.10
 
-    # if resize_factor:
-    #     camera_matrix[0,0] *= .35
-    #     camera_matrix[0,2] *= .35
-    #     camera_matrix[1,1] *= .46
-    #     camera_matrix[1,2] *= .46
-
-    for i, traj in enumerate(list_trajs):
+    for traj in list_trajs:
         xy_coords = traj[:, :2]
         traj_pixels = get_pos_pixels(
             xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
         )
         
-        if resize_factor:
+        if resize_factor: # Traversability image is 224 x 224 and the original fisheye image is 640 x 480
             traj_pixels[:,0] *= .35
             traj_pixels[:,1] *= .46
 
-        # print(traj_pixels)
-                
-        valid = (
-            (traj_pixels[:, 0] >= 0) & (traj_pixels[:, 0] < viz_img_size[1]) &
-            (traj_pixels[:, 1] >= 0) & (traj_pixels[:, 1] < viz_img_size[0])
-        )
-
-        # valid is a boolean mask for each pixel
-        inside_pixels = traj_pixels[valid]
-
-        # Check if ALL are inside
-        all_inside = np.all(valid)
-
-        # Check if ANY are inside
-        any_inside = np.any(valid)
-
-        # print(f"Trajectory {i}: all inside: {all_inside}, any inside: {any_inside}, total points: {len(traj_pixels)}, inside points: {len(inside_pixels)}")
-        
         points = traj_pixels.astype(int).reshape(-1, 1, 2)
-        # print(f"points shape {points.shape}, traj_pixels shape {traj_pixels.shape}")
-        # print(points[0])
-        # print(points[:, :, ::-1][0])
-        # points = points[:, :, ::-1]
-        # Random color for each trajectory
+
         color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
 
         # inverting x,y axis so origin in image is down-left corner
@@ -247,15 +287,10 @@ def plot_trajs_and_points_on_image(
             points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
 
         # Draw trajectory
-        cv2.polylines(img, [points], isClosed=False, color=color, thickness=3)
-
-        # Draw start point (green) and goal point (red)
-        # start = tuple(points[0, 0])
-        # goal = tuple(points[-1, 0])
-        # cv2.circle(img, start, 6, (0, 255, 0), -1)
-        # cv2.circle(img, goal, 6, (0, 0, 255), -1)
+        cv2.polylines(img, [points], isClosed=False, color=color, thickness=2)
 
     return img
+
 
 def make_path_marker(points, marker_id, r, g, b, frame_id="base_link"):
     marker = Marker()
@@ -280,6 +315,7 @@ def make_path_marker(points, marker_id, r, g, b, frame_id="base_link"):
         marker.points.append(p)
     # print("---------------")
     return marker
+
 
 def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
     marker = Marker()
@@ -313,12 +349,6 @@ def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
     marker.color.b = 0.0
 
     waypoint_viz_pub.publish(marker)
-
-
-
-
-
-
 
 
 
@@ -390,8 +420,9 @@ def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
 # I need to understand how the diffusion model will react to this gradient
 
 
+# TODO FIGURE IT OUT
 # For now correcting only one traj for debugging
-def _get_gradient_traversability(traj, fully_traversable_value=1.0):
+def _get_gradient_traversability(trajs, fully_traversable_value=1.0):
 
     if trav_img is None:
         return 
@@ -402,7 +433,7 @@ def _get_gradient_traversability(traj, fully_traversable_value=1.0):
     # F.grid_sample -> grid specifies the sampling pixel locations normalized by the input spatial dimensions. 
     # Therefore, it should have most values in the range of [-1, 1]
     # see https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.grid_sample.html
-    traj_normalized = torch.tensor(traj.copy(), dtype=torch.float32, requires_grad=True)  # [N,2]
+    traj_normalized = torch.tensor(trajs.copy(), dtype=torch.float32, requires_grad=True)  # [N,2]
     rospy.logdebug(f"Trajectory before traversability correction: {traj_normalized}")
     
     # grid for sampling: [1,N,1,2]
@@ -430,12 +461,23 @@ def _get_gradient_traversability(traj, fully_traversable_value=1.0):
 
 # 0 is untraversable and 1 is fully traversable. https://arxiv.org/pdf/2404.07110
 def _callback_traversability_image(trav_img_msg: Image):
-    trav_img = torch.from_numpy(ros_numpy.numpify(trav_img_msg))
-    # TODO CHECK 2 Traversability images values need to remains unchanged here
-    is_in_range = torch.all((trav_img >= 0) & (trav_img <= 1))
-    rospy.logdebug(f"Traversability image values in range [0, 1] ( 0 is untraversable and 1 is fully traversable.): {is_in_range}")
+    # trav_img = torch.from_numpy(ros_numpy.numpify(trav_img_msg))
+    # # TODO CHECK 2 Traversability images values need to remains unchanged here
+    # is_in_range = torch.all((trav_img >= 0) & (trav_img <= 1))
+    # rospy.logdebug(f"Traversability image values in range [0, 1] ( 0 is untraversable and 1 is fully traversable.): {is_in_range}")
+    # rospy.logdebug(f"Received traversability image of shape: {trav_img.shape}")
+    # rospy.logdebug(f"traversability image data type: {trav_img.dtype}\n")
+
+
+    #TODO NO MORE GLOABL HAVE TO FIND A WAY
+    global trav_img
+    trav_img = ros_numpy.numpify(trav_img_msg)
+    is_in_range = np.all((trav_img >= 0) & (trav_img <= 1))
+    rospy.logdebug(
+        f"Traversability image values in range [0, 1] (0 = untraversable, 1 = fully traversable): {is_in_range}"
+    )
     rospy.logdebug(f"Received traversability image of shape: {trav_img.shape}")
-    rospy.logdebug(f"traversability image data type: {trav_img.dtype}\n")
+    rospy.logdebug(f"Traversability image data type: {trav_img.dtype}\n")
 
 
 # TODO TRY TO NOT HAVE THE GLOBAL
@@ -573,14 +615,23 @@ def main(args: argparse.Namespace):
                 rospy.logdebug(f"time elapsed: {time.time() - start_time}")
 
             naction = to_numpy(get_action(naction))
-            naction_selected = naction[0] 
-            chosen_waypoint = naction_selected[args.waypoint]   
-            rospy.logdebug(f"Chosen waypoint: {chosen_waypoint}")             
+            naction_selected = naction[0] # we could choose based on trav instead 
 
-                    # interval = 6
-                    # if timestep <= interval:
-                    #     grad = pathguide.get_gradient(naction, goal_pos=rela_pos, scale_factor=scale_factor)
-                    #     naction -= grad
+            if args.trav_baseline:
+                best_traj, best_score = _select_traj_best_traversability(
+                    camera_matrix=camera_matrix_orig,
+                    dist_coeffs=dist_coeffs,
+                    list_trajs=naction,
+                    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                    resize_factor=True,
+                )
+                rospy.logdebug(f"Best trajectory score: {best_score}")
+
+                if best_traj is not None:
+                    naction_selected = best_traj
+
+            chosen_waypoint = naction_selected[args.waypoint] 
+            rospy.logdebug(f"Chosen waypoint: {chosen_waypoint}")             
 
 
             if model_params["normalize"]:
@@ -678,6 +729,10 @@ if __name__ == "__main__":
 
     argparser.add_argument(
         "--debug", action="store_true", help="Enable debug mode with verbose logging"
+    )
+
+    argparser.add_argument(
+        "--trav_baseline", action="store_true", help="Enable traversability baseline ONLY"
     )
     
     args = argparser.parse_args()
