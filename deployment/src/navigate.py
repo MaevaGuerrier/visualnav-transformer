@@ -51,6 +51,7 @@ print("Using device:", device)
 
 
 def callback_obs(msg):
+    
     obs_img = msg_to_pil(msg)
     if context_size is not None:
         if len(context_queue) < context_size + 1:
@@ -116,7 +117,7 @@ def main(args: argparse.Namespace):
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
 
-    print("Registered with master node. Waiting for image observations...")
+    # print("Registered with master node. Waiting for image observations...")
 
     if model_params["model_type"] == "nomad":
         num_diffusion_iters = model_params["num_diffusion_iters"]

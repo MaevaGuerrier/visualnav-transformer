@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Create a new tmux session
-session_name="gnm_locobot_$(date +%s)"
+session_name="vint_locobot_$(date +%s)"
 tmux new-session -d -s $session_name
 
 # Split the window into three panes
@@ -16,7 +16,9 @@ tmux send-keys "roscore" Enter
 
 # Run the create_topoplan.py script with command line args in the second pane
 tmux select-pane -t 1
-tmux send-keys "conda activate gnm_deployment" Enter
+tmux send-keys "conda init" Enter
+tmux send-keys "conda activate vint_deployment" Enter
+tmux send-keys "pip install -e ../../train/" Enter
 tmux send-keys "python create_topomap.py --dt 1 --dir $1" Enter
 
 # Change the directory to ../topomaps/bags and run the rosbag play command in the third pane

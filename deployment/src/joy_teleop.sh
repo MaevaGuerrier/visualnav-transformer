@@ -14,7 +14,8 @@ tmux send-keys "roslaunch gnm_locobot.launch" Enter
 
 # Run the teleop.py script in the second pane
 tmux select-pane -t 1
-tmux send-keys "conda activate gnm_deployment" Enter
+tmux send-keys "conda init" Enter
+tmux send-keys "conda activate vint_deployment" Enter
 tmux send-keys "python joy_teleop.py" Enter
 
 # Attach to the tmux session
