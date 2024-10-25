@@ -10,9 +10,7 @@ dependencies:
 - matplotlib
 - pyyaml
 - rospkg
-- pip:
-  - torch
-  - torchvision
-  - efficientnet_pytorch
-  - warmup_scheduler
-  - diffusers==0.11.1
+- torch
+- efficientnet_pytorch
+- warmup_scheduler
+- diffusers==0.11.1
