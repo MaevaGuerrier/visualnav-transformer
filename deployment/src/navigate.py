@@ -12,7 +12,9 @@ import yaml
 # ROS
 import rospy
 from sensor_msgs.msg import Image
+from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray
+from nav_msgs.msg import Path
 from utils import msg_to_pil, to_numpy, transform_images, load_model
 
 from vint_train.training.train_utils import get_action
@@ -51,7 +53,6 @@ print("Using device:", device)
 
 
 def callback_obs(msg):
-    
     obs_img = msg_to_pil(msg)
     if context_size is not None:
         if len(context_queue) < context_size + 1:
@@ -114,6 +115,10 @@ def main(args: argparse.Namespace):
         IMAGE_TOPIC, Image, callback_obs, queue_size=1)
     waypoint_pub = rospy.Publisher(
         WAYPOINT_TOPIC, Float32MultiArray, queue_size=1)  
+    waypoint_viz_pub = rospy.Publisher(
+        "viz_wp", PoseStamped, queue_size=1)
+    path_viz_pub = rospy.Publisher(
+        "viz_path", Path, queue_size=1)
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
 
@@ -223,12 +228,35 @@ def main(args: argparse.Namespace):
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
                     closest_node = min(start + min_dist_idx + 1, goal_node)
+                print("chosen wp", chosen_waypoint)
+                # Publish visualization messages
+                # Waypoint
+                # waypoint_msg_viz = PoseStamped()
+                # waypoint_msg_viz.header.frame_id = "odom"
+                # waypoint_msg_viz.header.stamp = rospy.Time.now()
+                # wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
+                # wp_position = Pose(position=wp_point)
+                # waypoint_msg_viz.pose = PoseStamped(
+                #     pose=wp_position)            
+                # waypoint_viz_pub.publish(waypoint_msg_viz)
+
+                # Path
+                path_msg_viz = Path()
+                path_msg_viz.header.frame_id = "base_footprint"
+                path_msg_viz.header.stamp = rospy.Time.now()
+                print("------")
+                for wp in waypoints[min_dist_idx]:
+                    print("waypoint:", wp)
+                    path_msg_viz.poses.append(PoseStamped(
+                        pose=Pose(position=Point(x=wp[0], y=wp[1]))))
+                path_viz_pub.publish(path_msg_viz)
         # RECOVERY MODE
         if model_params["normalize"]:
             chosen_waypoint[:2] *= (MAX_V / RATE)  
         waypoint_msg = Float32MultiArray()
         waypoint_msg.data = chosen_waypoint
         waypoint_pub.publish(waypoint_msg)
+
         reached_goal = closest_node == goal_node
         goal_pub.publish(reached_goal)
         if reached_goal:
@@ -264,7 +292,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--goal-node",
         "-g",
-        default=-1,
+        default=115,
         type=int,
         help="""goal node index in the topomap (if -1, then the goal node is 
         the last node in the topomap) (default: -1)""",
