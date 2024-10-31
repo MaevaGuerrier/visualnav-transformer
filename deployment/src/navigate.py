@@ -205,11 +205,15 @@ def main(args: argparse.Namespace):
                 waypoints = []
                 batch_obs_imgs = []
                 batch_goal_data = []
+                
                 for i, sg_img in enumerate(topomap[start: end + 1]):
                     transf_obs_img = transform_images(context_queue, model_params["image_size"])
                     goal_data = transform_images(sg_img, model_params["image_size"])
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
+                    
+                goal_img = topomap[-1]
+                subgoal_img = topomap[end]
                     
                 # predict distances and waypoints
                 batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
