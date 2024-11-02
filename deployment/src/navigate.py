@@ -207,12 +207,12 @@ def main(args: argparse.Namespace):
                 batch_goal_data = []
                 
                 for i, sg_img in enumerate(topomap[start: end + 1]):
-                    transf_obs_img = transform_images(context_queue, model_params["image_size"])
-                    goal_data = transform_images(sg_img, model_params["image_size"])
+                    transf_obs_img = transform_images(context_queue, model_params["image_size"], center_crop=True)
+                    goal_data = transform_images(sg_img, model_params["image_size"], center_crop= True)
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
                     
-                goal_img = topomap[-1]
+                goal_img = topomap[end + 1]
                 subgoal_img = topomap[end]
                     
                 # predict distances and waypoints
@@ -296,7 +296,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--goal-node",
         "-g",
-        default=115,
+        default=141,
         type=int,
         help="""goal node index in the topomap (if -1, then the goal node is 
         the last node in the topomap) (default: -1)""",

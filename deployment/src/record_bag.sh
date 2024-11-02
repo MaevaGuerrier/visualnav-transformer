@@ -12,17 +12,17 @@ tmux splitw -h -p 50 # split it into two halves
 
 # Run the roslaunch command in the first pane
 tmux select-pane -t 0
-tmux send-keys "roslaunch vint_locobot.launch" Enter
+tmux send-keys "roslaunch limo_gazebo_sim limo_GNM.launch" Enter
 
 # Run the teleop.py script in the second pane
 tmux select-pane -t 1
-tmux send-keys "conda activate vint_deployment" Enter
-tmux send-keys "python joy_teleop.py" Enter
+tmux send-keys "sleep 1" Enter
+tmux send-keys "roslaunch limo_bringup limo_teletop_keyboard.launch" Enter
 
 # Change the directory to ../topomaps/bags and run the rosbag record command in the third pane
 tmux select-pane -t 2
 tmux send-keys "cd ../topomaps/bags" Enter
-tmux send-keys "rosbag record /usb_cam/image_raw -o $1" # change topic if necessary
+tmux send-keys "rosbag record /limo/color/image_raw -o $1" # change topic if necessary
 
 # Attach to the tmux session
 tmux -2 attach-session -t $session_name
