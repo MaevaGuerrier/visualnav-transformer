@@ -15,7 +15,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray
 from nav_msgs.msg import Path
-from utils import msg_to_pil, to_numpy, transform_images, load_model
+from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
 
 from vint_train.training.train_utils import get_action
 import torch
@@ -121,6 +121,8 @@ def main(args: argparse.Namespace):
         "viz_path", Path, queue_size=1)
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
+    goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
+    subgoal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
 
     # print("Registered with master node. Waiting for image observations...")
 
@@ -212,9 +214,15 @@ def main(args: argparse.Namespace):
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
                     
-                goal_img = topomap[end + 1]
-                subgoal_img = topomap[end]
-                    
+                goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=True, return_img=True)
+                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=True, return_img=True)
+                goal_img_msg = pil_to_msg(goal_img)
+                goal_img_msg.header.stamp = rospy.Time.now()
+                goal_img_msg.header.frame_id = "base_footprint"
+                goal_img_msg.encoding = "rgb8"
+                goal_img_pub.publish(goal_img_msg)
+
+
                 # predict distances and waypoints
                 batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
                 batch_goal_data = torch.cat(batch_goal_data, dim=0).to(device)

@@ -131,7 +131,7 @@ def to_numpy(tensor):
     return tensor.cpu().detach().numpy()
 
 
-def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], center_crop: bool = False) -> torch.Tensor:
+def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], center_crop: bool = False, return_img : bool = False) -> torch.Tensor:
     """Transforms a list of PIL image to a torch tensor."""
     transform_type = transforms.Compose(
         [
@@ -151,6 +151,8 @@ def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], cent
             else:
                 pil_img = TF.center_crop(pil_img, (int(w / IMAGE_ASPECT_RATIO), w))
         pil_img = pil_img.resize(image_size) 
+        if return_img: # Added for debug purpose on rviz
+            return pil_img
         transf_img = transform_type(pil_img)
         transf_img = torch.unsqueeze(transf_img, 0)
         transf_imgs.append(transf_img)
