@@ -122,7 +122,7 @@ def main(args: argparse.Namespace):
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
-    subgoal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
+    subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
 
     # print("Registered with master node. Waiting for image observations...")
 
@@ -215,12 +215,18 @@ def main(args: argparse.Namespace):
                     batch_goal_data.append(goal_data)
                     
                 goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=True, return_img=True)
-                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=True, return_img=True)
                 goal_img_msg = pil_to_msg(goal_img)
                 goal_img_msg.header.stamp = rospy.Time.now()
                 goal_img_msg.header.frame_id = "base_footprint"
                 goal_img_msg.encoding = "rgb8"
                 goal_img_pub.publish(goal_img_msg)
+
+                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=True, return_img=True)
+                subgoal_img_msg = pil_to_msg(subgoal_img)
+                subgoal_img_msg.header.stamp = rospy.Time.now()
+                subgoal_img_msg.header.frame_id = "base_footprint"
+                subgoal_img_msg.encoding = "rgb8"
+                subgoal_img_pub.publish(subgoal_img_msg)
 
 
                 # predict distances and waypoints
