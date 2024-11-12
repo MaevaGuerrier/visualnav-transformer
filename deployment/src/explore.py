@@ -12,6 +12,8 @@ import yaml
 
 # ROS
 import rospy
+from geometry_msgs.msg import PoseStamped, Pose, Point
+from nav_msgs.msg import Path
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray
 from utils import msg_to_pil, to_numpy, transform_images, load_model
@@ -102,6 +104,9 @@ def main(args: argparse.Namespace):
     waypoint_pub = rospy.Publisher(
         WAYPOINT_TOPIC, Float32MultiArray, queue_size=1)  
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
+    path_viz_pub = rospy.Publisher(
+        "viz_path", Path, queue_size=1)
+
 
     print("Registered with master node. Waiting for image observations...")
 
@@ -112,7 +117,7 @@ def main(args: argparse.Namespace):
                 len(context_queue) > model_params["context_size"]
             ):
 
-            obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
+            obs_images = transform_images(context_queue, model_params["image_size"], center_crop=True)
             obs_images = obs_images.to(device)
             fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(device)
             mask = torch.ones(1).long().to(device) # ignore the goal
@@ -160,9 +165,21 @@ def main(args: argparse.Namespace):
             sampled_actions_msg.data = np.concatenate((np.array([0]), naction.flatten()))
             sampled_actions_pub.publish(sampled_actions_msg)
 
+            print(f"naction {naction}")
+
             naction = naction[0] # change this based on heuristic
 
+            print(f"naction[0] {naction[0]}")
+
             chosen_waypoint = naction[args.waypoint]
+            print(f"chosen waypoint {chosen_waypoint}")
+
+            # Path
+            path_msg_viz = Path()
+            path_msg_viz.header.frame_id = "camera_link"
+            path_msg_viz.header.stamp = rospy.Time.now()
+            path_msg_viz.poses.append(PoseStamped(pose=Pose(position=Point(x=chosen_waypoint[0], y=chosen_waypoint[1]))))
+            path_viz_pub.publish(path_msg_viz)
 
             if model_params["normalize"]:
                 chosen_waypoint *= (MAX_V / RATE)

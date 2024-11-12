@@ -20,9 +20,9 @@ MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 VEL_TOPIC = robot_config["vel_navi_topic"]
 DT = 1/robot_config["frame_rate"]
-RATE = 25
+RATE = 9 # Hz
 EPS = 1e-8
-WAYPOINT_TIMEOUT = 1 # seconds # TODO: tune this
+WAYPOINT_TIMEOUT = 1 # 1 # seconds # TODO: tune this
 FLIP_ANG_VEL = np.pi/4
 
 # GLOBALS

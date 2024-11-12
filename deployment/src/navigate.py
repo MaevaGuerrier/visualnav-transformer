@@ -73,7 +73,9 @@ def main(args: argparse.Namespace):
     with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
+    
     context_size = model_params["context_size"]
+    assert context_size != None
 
     # load model weights
     ckpth_path = model_paths[args.model]["ckpt_path"]
@@ -123,6 +125,7 @@ def main(args: argparse.Namespace):
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
     subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
+    closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
 
     # print("Registered with master node. Waiting for image observations...")
 
@@ -208,25 +211,34 @@ def main(args: argparse.Namespace):
                 batch_obs_imgs = []
                 batch_goal_data = []
                 
+                crop=True
                 for i, sg_img in enumerate(topomap[start: end + 1]):
-                    transf_obs_img = transform_images(context_queue, model_params["image_size"], center_crop=True)
-                    goal_data = transform_images(sg_img, model_params["image_size"], center_crop= True)
+                    transf_obs_img = transform_images(context_queue, model_params["image_size"], center_crop=crop)
+                    goal_data = transform_images(sg_img, model_params["image_size"], center_crop=crop)
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
                     
-                goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=True, return_img=True)
+                goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=crop, return_img=True)
                 goal_img_msg = pil_to_msg(goal_img)
                 goal_img_msg.header.stamp = rospy.Time.now()
                 goal_img_msg.header.frame_id = "base_footprint"
                 goal_img_msg.encoding = "rgb8"
                 goal_img_pub.publish(goal_img_msg)
 
-                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=True, return_img=True)
+                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=crop, return_img=True)
                 subgoal_img_msg = pil_to_msg(subgoal_img)
                 subgoal_img_msg.header.stamp = rospy.Time.now()
                 subgoal_img_msg.header.frame_id = "base_footprint"
                 subgoal_img_msg.encoding = "rgb8"
                 subgoal_img_pub.publish(subgoal_img_msg)
+
+
+                closest_node_img = transform_images(topomap[closest_node], model_params["image_size"], center_crop=crop, return_img=True)
+                closest_node_img_msg = pil_to_msg(closest_node_img)
+                closest_node_img_msg.header.stamp = rospy.Time.now()
+                closest_node_img_msg.header.frame_id = "base_footprint"
+                closest_node_img_msg.encoding = "rgb8"
+                closest_node_img_pub.publish(closest_node_img_msg)
 
 
                 # predict distances and waypoints
@@ -246,7 +258,10 @@ def main(args: argparse.Namespace):
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
                     closest_node = min(start + min_dist_idx + 1, goal_node)
-                print("chosen wp", chosen_waypoint)
+                # print("chosen wp", chosen_waypoint)
+                print("min dist idx", min_dist_idx)
+                print("closest node", closest_node)
+                print(f"end {end} start {start}")
                 # Publish visualization messages
                 # Waypoint
                 # waypoint_msg_viz = PoseStamped()
@@ -264,10 +279,13 @@ def main(args: argparse.Namespace):
                 path_msg_viz.header.stamp = rospy.Time.now()
                 print("------")
                 for wp in waypoints[min_dist_idx]:
-                    print("waypoint:", wp)
+                    # print("waypoint:", wp)
                     path_msg_viz.poses.append(PoseStamped(
                         pose=Pose(position=Point(x=wp[0], y=wp[1]))))
                 path_viz_pub.publish(path_msg_viz)
+                # for dist in distances:
+                    # print("distance:", dist)
+
         # RECOVERY MODE
         if model_params["normalize"]:
             chosen_waypoint[:2] *= (MAX_V / RATE)  
@@ -310,7 +328,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--goal-node",
         "-g",
-        default=141,
+        default=-1,
         type=int,
         help="""goal node index in the topomap (if -1, then the goal node is 
         the last node in the topomap) (default: -1)""",
@@ -326,7 +344,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--radius",
         "-r",
-        default=4,
+        default=2,
         type=int,
         help="""temporal number of locobal nodes to look at in the topopmap for
         localization (default: 2)""",

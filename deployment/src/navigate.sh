@@ -16,7 +16,7 @@ tmux selectp -t 0    # go back to the first pane
 
 # Run the roslaunch command in the first pane
 tmux select-pane -t 0
-tmux send-keys "roslaunch limo_gazebo_sim limo_GNM.launch" Enter
+tmux send-keys "roslaunch rtab_dumpster circuit.launch" Enter
 
 # Run the navigate.py script with command line args in the second pane
 tmux select-pane -t 1

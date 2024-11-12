@@ -8,7 +8,7 @@ import rospy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Joy
 
-IMAGE_TOPIC = "/limo/color/image_raw"
+IMAGE_TOPIC = "/camera/rgb/image_raw"
 TOPOMAP_IMAGES_DIR = "../topomaps/images"
 obs_img = None
 
