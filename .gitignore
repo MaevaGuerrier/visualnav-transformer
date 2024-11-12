@@ -10,6 +10,7 @@ train/gnm_dataset/*
 *.pth
 *.mp4
 *.gif
+*.bag
 
 deployment/model_weights/*
 deployment/topomaps/*
