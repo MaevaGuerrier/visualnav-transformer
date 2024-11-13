@@ -16,6 +16,7 @@ tmux send-keys "roslaunch gnm_locobot.launch" Enter
 tmux select-pane -t 1
 tmux send-keys "conda init" Enter
 tmux send-keys "conda activate vint_deployment" Enter
+tmux send-keys "pip install -e ../../train/" Enter
 tmux send-keys "python joy_teleop.py" Enter
 
 # Attach to the tmux session

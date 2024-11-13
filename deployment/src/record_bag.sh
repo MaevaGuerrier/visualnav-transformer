@@ -1,10 +1,10 @@
 #!/bin/bash
 
-launch_file="circuit.launch"
-launch_pkg="rtab_dumpster"
-ctrl_pkg="teleop_twist_keyboard"
-ctrl_launch="teleop_twist_keyboard.py"
-img_topic="/camera/rgb/image_raw"
+launch_file=`sed -n 's/^lAUNCH_FILE=\(.*\)/\1/p' < topic_names.py`
+launch_pkg=`sed -n 's/^lAUNCH_PKG=\(.*\)/\1/p' < topic_names.py`
+ctrl_pkg=`sed -n 's/^TELEOP_PKG=\(.*\)/\1/p' < topic_names.py`
+ctrl_launch=`sed -n 's/^TELEOP_LAUNCH=\(.*\)/\1/p' < topic_names.py`
+img_topic=`sed -n 's/^IMAGE_TOPIC=\(.*\)/\1/p' < topic_names.py`
 
 # Create a new tmux session
 session_name="record_bag_$(date +%s)"

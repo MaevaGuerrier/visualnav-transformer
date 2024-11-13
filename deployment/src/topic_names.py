@@ -1,4 +1,11 @@
 # topic names for ROS communication
+# IMPORTANT THIS FILE HAS TO BE IN THE SAME FOLDER AS SHELL SCRIPTS (record_bag.sh, explore.sh, navigate.sh)
+
+# Launch file related information for your robot 
+lAUNCH_FILE = "turtle_bot.launch" 
+lAUNCH_PKG = "limo_gazebo_sim"
+TELEOP_PKG = "teleop_twist_keyboard"
+TELEOP_LAUNCH = "teleop_twist_keyboard.py"
 
 # image obs topics
 FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"

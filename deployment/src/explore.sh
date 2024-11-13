@@ -1,5 +1,8 @@
 #!/bin/bash
 
+launch_file=`sed -n 's/^lAUNCH_FILE=\(.*\)/\1/p' < topic_names.py`
+launch_pkg=`sed -n 's/^lAUNCH_PKG=\(.*\)/\1/p' < topic_names.py`
+
 # Create a new tmux session
 session_name="vint_locobot_$(date +%s)"
 tmux new-session -d -s $session_name
@@ -16,7 +19,7 @@ tmux selectp -t 0    # go back to the first pane
 
 # Run the roslaunch command in the first pane
 tmux select-pane -t 0
-tmux send-keys "roslaunch rtab_dumpster circuit.launch" Enter
+tmux send-keys "roslaunch ${launch_pkg} ${launch_file}" Enter
 
 # Run the navigate.py script with command line args in the second pane
 tmux select-pane -t 1
