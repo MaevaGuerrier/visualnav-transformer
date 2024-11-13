@@ -6,6 +6,7 @@ img_topic=`sed -n 's/^IMAGE_TOPIC *= *"\(.*\)"/\1/p' topic_names.py`
 ctrl_pkg=`sed -n 's/^TELEOP_PKG *= *"\(.*\)"/\1/p' topic_names.py`
 ctrl_launch=`sed -n 's/^TELEOP_LAUNCH *= *"\(.*\)"/\1/p' topic_names.py`
 
+
 # Create a new tmux session
 session_name="record_bag_$(date +%s)"
 tmux new-session -d -s $session_name
