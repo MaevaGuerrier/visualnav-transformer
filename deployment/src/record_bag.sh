@@ -1,10 +1,10 @@
 #!/bin/bash
 
-launch_file=`sed -n 's/^lAUNCH_FILE=\(.*\)/\1/p' < topic_names.py`
-launch_pkg=`sed -n 's/^lAUNCH_PKG=\(.*\)/\1/p' < topic_names.py`
-ctrl_pkg=`sed -n 's/^TELEOP_PKG=\(.*\)/\1/p' < topic_names.py`
-ctrl_launch=`sed -n 's/^TELEOP_LAUNCH=\(.*\)/\1/p' < topic_names.py`
-img_topic=`sed -n 's/^IMAGE_TOPIC=\(.*\)/\1/p' < topic_names.py`
+launch_file=`sed -n 's/^LAUNCH_FILE *= *"\(.*\)"/\1/p' topic_names.py`
+launch_pkg=`sed -n 's/^LAUNCH_PKG *= *"\(.*\)"/\1/p' topic_names.py`
+img_topic=`sed -n 's/^IMAGE_TOPIC *= *"\(.*\)"/\1/p' topic_names.py`
+ctrl_pkg=`sed -n 's/^TELEOP_PKG *= *"\(.*\)"/\1/p' topic_names.py`
+ctrl_launch=`sed -n 's/^TELEOP_LAUNCH *= *"\(.*\)"/\1/p' topic_names.py`
 
 # Create a new tmux session
 session_name="record_bag_$(date +%s)"
