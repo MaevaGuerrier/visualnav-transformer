@@ -18,7 +18,7 @@ cd /workspace/src/visualnav-transformer/deployment/src
 
 # Create a new tmux session
 session_name="vint_locobot_$(date +%s)"
-tmux new-session -d -s $session_name
+tmux new-session -d -s $session_namef
 
 # Split the window into four panes
 tmux selectp -t 0    # select the first (0) pane
