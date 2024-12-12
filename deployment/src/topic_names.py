@@ -10,7 +10,7 @@ TELEOP_LAUNCH = "teleop_twist_keyboard.py"
 # image obs topics
 FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"
 REVERSE_IMAGE_TOPIC = "/usb_cam_reverse/image_raw"
-IMAGE_TOPIC = "/camera/rgb/image_raw"
+IMAGE_TOPIC = "/usb_cam/image_raw" #"/camera/rgb/image_raw"
 
 # exploration topics
 SUBGOALS_TOPIC = "/subgoals"

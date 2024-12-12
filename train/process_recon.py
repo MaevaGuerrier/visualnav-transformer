@@ -8,7 +8,8 @@ import tqdm
 
 
 def main(args: argparse.Namespace):
-    recon_dir = os.path.join(args.input_dir, "recon_release")
+    # recon_dir = os.path.join(args.input_dir, "recon_release")
+    recon_dir = os.path.join(args.input_dir, "000011")
     output_dir = args.output_dir
 
     # create output dir if it doesn't exist

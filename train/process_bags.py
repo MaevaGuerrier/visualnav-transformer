@@ -7,12 +7,15 @@ import argparse
 import tqdm
 import yaml
 import rosbag
+import glob 
 
 # utils
 from vint_train.process_data.process_data_utils import *
 
 
 def main(args: argparse.Namespace):
+
+    # print(f"output_dir {args.output_dir} input {args.input_dir}  num traj {args.num_trajs} dataset {args.dataset_name}")
 
     # load the config file
     with open("vint_train/process_data/process_bags_config.yaml", "r") as f:
@@ -41,9 +44,11 @@ def main(args: argparse.Namespace):
             continue
 
         # name is that folders separated by _ and then the last part of the path
-        traj_name = "_".join(bag_path.split("/")[-2:])[:-4]
+        traj_name = bag_path.split("/")[-1].replace('.bag','')
+        # Original code but failed to account for different dir structure
+        # traj_name = "_".join(bag_path.split("/")[-2:])[:-4]
 
-        # load the hdf5 file
+        # # load the hdf5 file
         bag_img_data, bag_traj_data = get_images_and_odom(
             b,
             config[args.dataset_name]["imtopics"],
@@ -54,7 +59,7 @@ def main(args: argparse.Namespace):
             ang_offset=config[args.dataset_name]["ang_offset"],
         )
 
-  
+        # print(f"{bag_img_data}  {bag_traj_data}")
         if bag_img_data is None or bag_traj_data is None:
             print(
                 f"{bag_path} did not have the topics we were looking for. Skipping..."
@@ -62,6 +67,7 @@ def main(args: argparse.Namespace):
             continue
         # remove backwards movement
         cut_trajs = filter_backwards(bag_img_data, bag_traj_data)
+  
 
         for i, (img_data_i, traj_data_i) in enumerate(cut_trajs):
             traj_name_i = traj_name + f"_{i}"
