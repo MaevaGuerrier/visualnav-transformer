@@ -1,204 +1,214 @@
+#!/usr/bin/env python3
 
-import matplotlib.pyplot as plt
+import argparse
 import os
-from typing import Tuple, Sequence, Dict, Union, Optional, Callable
+import time
+from typing import List
+
+import gymnasium as gym
 import numpy as np
+import robo_gym
 import torch
 import torch.nn as nn
+import yaml
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-
-import matplotlib.pyplot as plt
-import yaml
-
-# ROS
-import rospy
-from sensor_msgs.msg import Image
-from std_msgs.msg import Bool, Float32MultiArray
-from utils import msg_to_pil, to_numpy, transform_images, load_model
-
-from vint_train.training.train_utils import get_action
-import torch
 from PIL import Image as PILImage
-import numpy as np
-import argparse
-import yaml
-import time
+
+# Local imports
+from pd_controller import PDController
+from topic_names import IMAGE_TOPIC, WAYPOINT_TOPIC, SAMPLED_ACTIONS_TOPIC
+from utils import to_numpy, transform_images, load_model
+from vint_train.training.train_utils import get_action
 
 
-# UTILS
-from topic_names import (IMAGE_TOPIC,
-                        WAYPOINT_TOPIC,
-                        SAMPLED_ACTIONS_TOPIC)
+class RobotNavigationController:
+    """Navigation controller for robot using diffusion models."""
 
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
 
-# CONSTANTS
-MODEL_WEIGHTS_PATH = "../model_weights"
-ROBOT_CONFIG_PATH ="../config/robot.yaml"
-MODEL_CONFIG_PATH = "../config/models.yaml"
-with open(ROBOT_CONFIG_PATH, "r") as f:
-    robot_config = yaml.safe_load(f)
-MAX_V = robot_config["max_v"]
-MAX_W = robot_config["max_w"]
-RATE = robot_config["frame_rate"] 
+        self.robot_config = self._load_config("../config/robot.yaml")
+        self.model_configs = self._load_config("../config/models.yaml")
 
-# GLOBALS
-context_queue = []
-context_size = None  
+        self.max_v = self.robot_config["max_v"]
+        self.max_w = self.robot_config["max_w"]
+        self.rate = self.robot_config["frame_rate"]
 
-# Load the model 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", device)
+        self.controller = PDController()
+        self.model = None
+        self.noise_scheduler = None
+        self.context_queue = []
+        self.context_size = None
 
-def callback_obs(msg):
-    obs_img = msg_to_pil(msg)
-    if context_size is not None:
-        if len(context_queue) < context_size + 1:
-            context_queue.append(obs_img)
+        self._setup_environment()
+        self._setup_model()
+
+    def _load_config(self, config_path: str) -> dict:
+        """Load YAML configuration file."""
+        with open(config_path, "r") as f:
+            return yaml.safe_load(f)
+
+    def _setup_environment(self):
+        """Initialize the robo-gym environment."""
+        self.env = gym.make(
+            'EmptyEnvironmentInterbotixRRob-v0',
+            rs_address='127.0.0.1:50051',
+            gui=True,
+            robot_model='locobot_wx250s',
+            with_camera=True
+        )
+
+        obs, _ = self.env.reset()
+        self.arm_joint_states = obs['state'][:6]
+
+    def _setup_model(self):
+        """Load and configure the diffusion model."""
+
+        model_config_path = self.model_configs[self.args.model]["config_path"]
+        model_params = self._load_config(model_config_path)
+        self.context_size = model_params["context_size"]
+
+        ckpt_path = self.model_configs[self.args.model]["ckpt_path"]
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Model weights not found at {ckpt_path}")
+
+        print(f"Loading model from {ckpt_path}")
+        self.model = load_model(ckpt_path, model_params, self.device)
+        self.model.eval()
+
+        self.noise_scheduler = DDPMScheduler(
+            num_train_timesteps=model_params["num_diffusion_iters"],
+            beta_schedule='squaredcos_cap_v2',
+            clip_sample=True,
+            prediction_type='epsilon'
+        )
+
+        self.model_params = model_params
+
+    def _update_context_queue(self, new_image):
+        """Update the context queue with a new observation."""
+        if len(self.context_queue) < self.context_size + 1:
+            self.context_queue.append(new_image)
         else:
-            context_queue.pop(0)
-            context_queue.append(obs_img)
+            self.context_queue.pop(0)
+            self.context_queue.append(new_image)
+
+    def _predict_actions(self) -> np.ndarray:
+        """Predict actions using the diffusion model."""
+        obs_images = transform_images(
+            self.context_queue,
+            self.model_params["image_size"],
+            center_crop=False
+        ).to(self.device)
+
+        fake_goal = torch.randn((1, 3, *self.model_params["image_size"])).to(self.device)
+        mask = torch.ones(1).long().to(self.device)
+
+        with torch.no_grad():
+            obs_cond = self.model('vision_encoder', obs_img=obs_images, goal_img=fake_goal, input_goal_mask=mask)
+
+            if len(obs_cond.shape) == 2:
+                obs_cond = obs_cond.repeat(self.args.num_samples, 1)
+            else:
+                obs_cond = obs_cond.repeat(self.args.num_samples, 1, 1)
+
+            noisy_action = torch.randn(
+                (self.args.num_samples, self.model_params["len_traj_pred"], 2),
+                device=self.device
+            )
+
+            # Diffusion denoising process
+            self.noise_scheduler.set_timesteps(self.model_params["num_diffusion_iters"])
+
+            start_time = time.time()
+            for k in self.noise_scheduler.timesteps:
+                noise_pred = self.model(
+                    'noise_pred_net',
+                    sample=noisy_action,
+                    timestep=k,
+                    global_cond=obs_cond
+                )
+
+                noisy_action = self.noise_scheduler.step(
+                    model_output=noise_pred,
+                    timestep=k,
+                    sample=noisy_action
+                ).prev_sample
+
+            inference_time = time.time() - start_time
+            print(f"Inference time: {inference_time:.3f}s")
+
+        return to_numpy(get_action(noisy_action))
+
+    def _get_base_velocity_command(self, waypoint: np.ndarray) -> List[float]:
+        """Convert waypoint to base velocity command."""
+        if self.model_params["normalize"]:
+            waypoint *= (self.max_v / self.rate)
+        return self.controller.get_velocity(waypoint)
+
+    def run(self):
+        """Main navigation loop."""
+        print("Starting navigation loop...")
+
+        try:
+            while True:
+                obs, _, _, _, _= self.env.step(list(self.arm_joint_states) + [0, 0])
+                current_image = obs['camera']
+
+                self._update_context_queue(current_image)
+
+                chosen_waypoint = np.zeros(4)
+                if len(self.context_queue) > self.context_size:
+                    predicted_actions = self._predict_actions()
+                    selected_action = predicted_actions[0]
+                    chosen_waypoint = selected_action[self.args.waypoint]
+
+                base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
+
+                action = list(self.arm_joint_states) + base_velocity_command
+                print(f'Executing action: {action}')
+                obs, _, _, _, _ = self.env.step(action)
+
+                time.sleep(0.1)
+
+        except KeyboardInterrupt:
+            print("\nNavigation stopped by user")
+        except Exception as e:
+            print(f"Error during navigation: {e}")
+            raise
 
 
-def main(args: argparse.Namespace):
-    global context_size
-
-    # load model parameters
-    with open(MODEL_CONFIG_PATH, "r") as f:
-        model_paths = yaml.safe_load(f)
-
-    model_config_path = model_paths[args.model]["config_path"]
-    with open(model_config_path, "r") as f:
-        model_params = yaml.safe_load(f)
-
-    context_size = model_params["context_size"]
-
-    # load model weights
-    ckpth_path = model_paths[args.model]["ckpt_path"]
-    if os.path.exists(ckpth_path):
-        print(f"Loading model from {ckpth_path}")
-    else:
-        raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
-    model = load_model(
-        ckpth_path,
-        model_params,
-        device,
+def main():
+    """Main function to parse arguments and run navigation."""
+    parser = argparse.ArgumentParser(
+        description="Run diffusion-based navigation on the Locobot"
     )
-    model = model.to(device)
-    model.eval()
-
-    num_diffusion_iters = model_params["num_diffusion_iters"]
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=model_params["num_diffusion_iters"],
-        beta_schedule='squaredcos_cap_v2',
-        clip_sample=True,
-        prediction_type='epsilon'
+    parser.add_argument(
+        "--model", "-m",
+        default="nomad",
+        type=str,
+        help="Model name (check ../config/models.yaml) (default: nomad)"
+    )
+    parser.add_argument(
+        "--waypoint", "-w",
+        default=2,
+        type=int,
+        help="Index of waypoint for navigation (0-4) (default: 2)"
+    )
+    parser.add_argument(
+        "--num-samples", "-n",
+        default=8,
+        type=int,
+        help="Number of action samples from exploration model (default: 8)"
     )
 
-    # ROS
-    rospy.init_node("EXPLORATION", anonymous=False)
-    rate = rospy.Rate(RATE)
-    image_curr_msg = rospy.Subscriber(
-        IMAGE_TOPIC, Image, callback_obs, queue_size=1)
-    waypoint_pub = rospy.Publisher(
-        WAYPOINT_TOPIC, Float32MultiArray, queue_size=1)  
-    sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
+    args = parser.parse_args()
 
-    print("Registered with master node. Waiting for image observations...")
-
-    while not rospy.is_shutdown():
-        # EXPLORATION MODE
-        waypoint_msg = Float32MultiArray()
-        if (
-                len(context_queue) > model_params["context_size"]
-            ):
-
-            obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
-            obs_images = obs_images.to(device)
-            fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(device)
-            mask = torch.ones(1).long().to(device) # ignore the goal
-
-            # infer action
-            with torch.no_grad():
-                # encoder vision features
-                obs_cond = model('vision_encoder', obs_img=obs_images, goal_img=fake_goal, input_goal_mask=mask)
-                
-                # (B, obs_horizon * obs_dim)
-                if len(obs_cond.shape) == 2:
-                    obs_cond = obs_cond.repeat(args.num_samples, 1)
-                else:
-                    obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
-                
-                # initialize action from Gaussian noise
-                noisy_action = torch.randn(
-                    (args.num_samples, model_params["len_traj_pred"], 2), device=device)
-                naction = noisy_action
-
-                # init scheduler
-                noise_scheduler.set_timesteps(num_diffusion_iters)
-
-                start_time = time.time()
-                for k in noise_scheduler.timesteps[:]:
-                    # predict noise
-                    noise_pred = model(
-                        'noise_pred_net',
-                        sample=naction,
-                        timestep=k,
-                        global_cond=obs_cond
-                    )
-
-                    # inverse diffusion step (remove noise)
-                    naction = noise_scheduler.step(
-                        model_output=noise_pred,
-                        timestep=k,
-                        sample=naction
-                    ).prev_sample
-                print("time elapsed:", time.time() - start_time)
-
-            naction = to_numpy(get_action(naction))
-            
-            sampled_actions_msg = Float32MultiArray()
-            sampled_actions_msg.data = np.concatenate((np.array([0]), naction.flatten()))
-            sampled_actions_pub.publish(sampled_actions_msg)
-
-            naction = naction[0] # change this based on heuristic
-
-            chosen_waypoint = naction[args.waypoint]
-
-            if model_params["normalize"]:
-                chosen_waypoint *= (MAX_V / RATE)
-            waypoint_msg.data = chosen_waypoint
-            waypoint_pub.publish(waypoint_msg)
-            print("Published waypoint")
-        rate.sleep()
+    navigator = RobotNavigationController(args)
+    navigator.run()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Code to run GNM DIFFUSION EXPLORATION on the locobot")
-    parser.add_argument(
-        "--model",
-        "-m",
-        default="nomad",
-        type=str,
-        help="model name (hint: check ../config/models.yaml) (default: nomad)",
-    )
-    parser.add_argument(
-        "--waypoint",
-        "-w",
-        default=2, # close waypoints exihibit straight line motion (the middle waypoint is a good default)
-        type=int,
-        help=f"""index of the waypoint used for navigation (between 0 and 4 or 
-        how many waypoints your model predicts) (default: 2)""",
-    )
-    parser.add_argument(
-        "--num-samples",
-        "-n",
-        default=8,
-        type=int,
-        help=f"Number of actions sampled from the exploration model (default: 8)",
-    )
-    args = parser.parse_args()
-    print(f"Using {device}")
-    main(args)
-
-
+    main()

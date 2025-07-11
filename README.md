@@ -19,10 +19,9 @@ This repository contains code for training our family of models with your own da
 - `./train/train.py`: training script to train or fine-tune the ViNT model on your custom data.
 - `./train/vint_train/models/`: contains model files for GNM, ViNT, and some baselines.
 - `./train/process_*.py`: scripts to process rosbags or other formats of robot trajectories into training data.
-- `./deployment/src/record_bag.sh`: script to collect a demo trajectory as a ROS bag in the target environment on the robot. This trajectory is subsampled to generate a topological graph of the environment.
 - `./deployment/src/create_topomap.sh`: script to convert a ROS bag of a demo trajectory into a topological graph that the robot can use to navigate.
-- `./deployment/src/navigate.sh`: script that deploys a trained GNM/ViNT/NoMaD model on the robot to navigate to a desired goal in the generated topological graph. Please see relevant sections below for configuration settings.
-- `./deployment/src/explore.sh`: script that deploys a trained NoMaD model on the robot to randomly explore its environment. Please see relevant sections below for configuration settings.
+- `./deployment/src/navigate.py`: script that deploys a trained GNM/ViNT/NoMaD model on the robot to navigate to a desired goal in the generated topological graph. Please see relevant sections below for configuration settings.
+- `./deployment/src/explore.py`: script that deploys a trained NoMaD model on the robot to randomly explore its environment. Please see relevant sections below for configuration settings.
 
 ## Train
 
@@ -31,23 +30,43 @@ This subfolder contains code for processing datasets and training models from yo
 ### Pre-requisites
 
 The codebase assumes access to a workstation running Ubuntu (tested on 18.04 and 20.04), Python 3.7+, and a GPU with CUDA 10+. It also assumes access to conda, but you can modify it to work with other virtual environment packages, or a native setup.
-### Setup
-Run the commands below inside the `vint_release/` (topmost) directory:
+
+### Installation
+
+```
+mkdir -p ~/vint_ws/src
+cd ~/vint_ws/src
+git clone -b ROS2 git@github.com:montrealrobotics/visualnav-transformer.git
+git clone git@github.com:real-stanford/diffusion_policy.git
+git clone -b ROS2 git@github.com:montrealrobotics/robo-gym.git
+```
+
+Follow the installation instructions in the [robo-gym repo](https://github.com/montrealrobotics/robo-gym)
+You will need to install the robo-gym robot servers package, this can be on your local machine or a machine with ros2 already installed. It should be on the same network as the robot so that it has access to the robot topics.
+
+Installation instructions [here](https://github.com/montrealrobotics/robo-gym-robot-servers/tree/ros2)
+
+```
+cd ~/vint_ws/src/visualnav-transformer
+```
+
+To create a training conda environment:
+
 1. Set up the conda environment:
     ```bash
     conda env create -f train/train_environment.yml
     ```
 2. Source the conda environment:
     ```
-    conda activate vint_train
+    conda activate nomad_train
     ```
 3. Install the vint_train packages:
     ```bash
     pip install -e train/
     ```
-4. Install the `diffusion_policy` package from this [repo](https://github.com/real-stanford/diffusion_policy):
+4. Install the `diffusion_policy` package
     ```bash
-    git clone git@github.com:real-stanford/diffusion_policy.git
+    cd ~/vint_ws/src/
     pip install -e diffusion_policy/
     ```
 
@@ -150,41 +169,42 @@ This subfolder contains code to load a pre-trained ViNT and deploy it on the ope
 
 ### LoCoBot Setup
 
-This software was tested on a LoCoBot running Ubuntu 20.04.
+This software was tested with a LoCoBot wx250s running Ubuntu 22.04 with ROS2 humble
 
 
 #### Software Installation (in this order)
-1. ROS: [ros-noetic](https://wiki.ros.org/noetic/Installation/Ubuntu)
-2. ROS packages: 
+The locobot shoud have the ROS2 humble software stack installed.
+
+On your local machine (not the locobot)
+
+```
+cd ~/vint_ws/src/visualnav-transformer
+```
+
+To create a deployment conda environment:
+
+1. Set up the conda environment:
     ```bash
-    sudo apt-get install ros-noetic-usb-cam ros-noetic-joy
+    conda env create -f deployment/deployment_environment.yaml
     ```
-3. [kobuki](http://wiki.ros.org/kobuki/Tutorials/Installation)
-4. Conda 
-    - Install anaconda/miniconda/etc. for managing environments
-    - Make conda env with environment.yml (run this inside the `vint_release/` directory)
-        ```bash
-        conda env create -f deployment/deployment_environment.yaml
-        ```
-    - Source env 
-        ```bash
-        conda activate vint_deployment
-        ```
-    - (Recommended) add to `~/.bashrc`: 
-        ```bash
-        echo “conda activate vint_deployment” >> ~/.bashrc 
-        ```
-5. Install the `vint_train` packages (run this inside the `vint_release/` directory):
+2. Source the conda environment:
+    ```
+    conda activate vint_deploy
+    ```
+3. Install the vint_train packages:
     ```bash
     pip install -e train/
     ```
-6. Install the `diffusion_policy` package from this [repo](https://github.com/real-stanford/diffusion_policy):
+4. Install the `diffusion_policy` package
     ```bash
-    git clone git@github.com:real-stanford/diffusion_policy.git
+    cd ~/vint_ws/src/
     pip install -e diffusion_policy/
     ```
-7. (Recommended) Install [tmux](https://github.com/tmux/tmux/wiki/Installing) if not present.
-    Many of the bash scripts rely on tmux to launch multiple screens with different commands. This will be useful for debugging because you can see the output of each screen.
+5. Install robo-gym in the conda env
+    ```bash
+    cd ~/vint_ws/src/robo-gym
+    pip install -e .
+    ```
 
 #### Hardware Requirements
 - LoCoBot: http://locobot.org (just the navigation stack)
@@ -204,26 +224,21 @@ _Make sure to run these scripts inside the `vint_release/deployment/src/` direct
 This section discusses a simple way to create a topological map of the target environment for deployment. For simplicity, we will use the robot in “path-following” mode, i.e. given a single trajectory in an environment, the task is to follow the same trajectory to the goal. The environment may have new/dynamic obstacles, lighting variations etc.
 
 #### Record the rosbag: 
-```bash
-./record_bag.sh <bag_name>
-```
+On the locobot
+1. `ros2 launch interbotix_xslocobot_joy xslocobot_joy.launch.py robot_model:=locobot_wx250s use_camera:=false use_usb_cam:=true use_rviz:=false`: This launches the locobot driver, joystick control and usb camera.
+On your local machine, from deployment/src
+2. `ros2 bag record /usb_cam/image_raw -o ../topomaps/bags/<bag_name>`: This command isn’t run immediately (you have to click Enter). It will be run in the vint_release/deployment/topomaps/bags directory, where we recommend you store your rosbags.
 
-Run this command to teleoperate the robot with the joystick and camera. This command opens up three windows 
-1. `roslaunch vint_locobot.launch`: This launch file opens the `usb_cam` node for the camera, the joy node for the joystick, and nodes for the robot’s mobile base.
-2. `python joy_teleop.py`: This python script starts a node that reads inputs from the joy topic and outputs them on topics that teleoperate the robot’s base.
-3. `rosbag record /usb_cam/image_raw -o <bag_name>`: This command isn’t run immediately (you have to click Enter). It will be run in the vint_release/deployment/topomaps/bags directory, where we recommend you store your rosbags.
-
-Once you are ready to record the bag, run the `rosbag record` script and teleoperate the robot on the map you want the robot to follow. When you are finished with recording the path, kill the `rosbag record` command, and then kill the tmux session.
+Once you are ready to record the bag, run the `ros2 bag record` script and teleoperate the robot on the map you want the robot to follow. When you are finished with recording the path, kill the `ros2 bag record` command, and then kill the tmux session.
 
 #### Make the topological map: 
 ```bash
 ./create_topomap.sh <topomap_name> <bag_filename>
 ```
 
-This command opens up 3 windows:
-1. `roscore`
-2. `python create_topomap.py —dt 1 —dir <topomap_dir>`: This command creates a directory in `/vint_release/deployment/topomaps/images` and saves an image as a node in the map every second the bag is played.
-3. `rosbag play -r 1.5 <bag_filename>`: This command plays the rosbag at x5 speed, so the python script is actually recording nodes 1.5 seconds apart. The `<bag_filename>` should be the entire bag name with the .bag extension. You can change this value in the `make_topomap.sh` file. The command does not run until you hit Enter, which you should only do once the python script gives its waiting message. Once you play the bag, move to the screen where the python script is running so you can kill it when the rosbag stops playing.
+This command opens up 2 windows:
+1. `python create_topomap.py —dt 1 —dir <topomap_dir>`: This command creates a directory in `/vint_release/deployment/topomaps/images` and saves an image as a node in the map every second the bag is played.
+2. `ros2 bag play -r 1.5 <bag_filename>`: This command plays the rosbag at x5 speed, so the python script is actually recording nodes 1.5 seconds apart. The `<bag_filename>` should be the entire bag name with the .bag extension. You can change this value in the `make_topomap.sh` file. The command does not run until you hit Enter, which you should only do once the python script gives its waiting message. Once you play the bag, move to the screen where the python script is running so you can kill it when the rosbag stops playing.
 
 When the bag stops playing, kill the tmux session.
 
@@ -232,58 +247,32 @@ When the bag stops playing, kill the tmux session.
 #### Navigation
 _Make sure to run this script inside the `vint_release/deployment/src/` directory._
 
-```bash
-./navigate.sh “--model <model_name> --dir <topomap_dir>”
+
+The ros2 nodes will be running on the locobot. The vint stack will be running on a separete machine.
+The robo-gym robot server should be running either locally or remotely.
+
+On the robot:
+```
+ros2 launch interbotix_xslocobot_control xslocobot_control.launch.py robot_model:=locobot_wx250s use_base:=true use_camera:=false use_lidar:=true lidar_type:=rplidar_a2m8 use_usb_cam:=true
 ```
 
-To deploy one of the models from the published results, we are releasing model checkpoints that you can download from [this link](https://drive.google.com/drive/folders/1a9yWR2iooXFAqjQHetz263--4_2FFggg?usp=sharing).
-
-
-The `<model_name>` is the name of the model in the `vint_release/deployment/config/models.yaml` file. In this file, you specify these parameters of the model for each model (defaults used):
-- `config_path` (str): path of the *.yaml file in `vint_release/train/config/` used to train the model
-- `ckpt_path` (str): path of the *.pth file in `vint_release/deployment/model_weights/`
-
-
-Make sure these configurations match what you used to train the model. The configurations for the models we provided the weights for are provided in yaml file for your reference.
-
-The `<topomap_dir>` is the name of the directory in `vint_release/deployment/topomaps/images` that has the images corresponding to the nodes in the topological map. The images are ordered by name from 0 to N.
-
-This command opens up 4 windows:
-
-1. `roslaunch vint_locobot.launch`: This launch file opens the usb_cam node for the camera, the joy node for the joystick, and several nodes for the robot’s mobile base).
-2. `python navigate.py --model <model_name> -—dir <topomap_dir>`: This python script starts a node that reads in image observations from the `/usb_cam/image_raw` topic, inputs the observations and the map into the model, and publishes actions to the `/waypoint` topic.
-3. `python joy_teleop.py`: This python script starts a node that reads inputs from the joy topic and outputs them on topics that teleoperate the robot’s base.
-4. `python pd_controller.py`: This python script starts a node that reads messages from the `/waypoint` topic (waypoints from the model) and outputs velocities to navigate the robot’s base.
-
-When the robot is finishing navigating, kill the `pd_controller.py` script, and then kill the tmux session. If you want to take control of the robot while it is navigating, the `joy_teleop.py` script allows you to do so with the joystick.
-
-#### Exploration
-_Make sure to run this script inside the `vint_release/deployment/src/` directory._
-
-```bash
-./exploration.sh “--model <model_name>”
+In a terminal on your local machine, (can be remote too), start the robo-gym robot server:
+```
+ros2 launch interbotix_rover_robot_server interbotix_rover_robot_server.launch.py         world_name:=empty.world         reference_frame:=base_link         action_cycle_rate:=20.0         rviz_gui:=false         gazebo_gui:=true camera:=true resize_image:=true real_robot:=true context_size:=1
 ```
 
-To deploy one of the models from the published results, we are releasing model checkpoints that you can download from [this link](https://drive.google.com/drive/folders/1a9yWR2iooXFAqjQHetz263--4_2FFggg?usp=sharing).
+To run the navigation script:
+```
+python navigation.py <name of map>
+```
 
+To run the explore script:
+```
+python explore.py
+```
 
-The `<model_name>` is the name of the model in the `vint_release/deployment/config/models.yaml` file (note that only NoMaD works for exploration). In this file, you specify these parameters of the model for each model (defaults used):
-- `config_path` (str): path of the *.yaml file in `vint_release/train/config/` used to train the model
-- `ckpt_path` (str): path of the *.pth file in `vint_release/deployment/model_weights/`
-
-
-Make sure these configurations match what you used to train the model. The configurations for the models we provided the weights for are provided in yaml file for your reference.
-
-The `<topomap_dir>` is the name of the directory in `vint_release/deployment/topomaps/images` that has the images corresponding to the nodes in the topological map. The images are ordered by name from 0 to N.
-
-This command opens up 4 windows:
-
-1. `roslaunch vint_locobot.launch`: This launch file opens the usb_cam node for the camera, the joy node for the joystick, and several nodes for the robot’s mobile base.
-2. `python explore.py --model <model_name>`: This python script starts a node that reads in image observations from the `/usb_cam/image_raw` topic, inputs the observations and the map into the model, and publishes exploration actions to the `/waypoint` topic.
-3. `python joy_teleop.py`: This python script starts a node that reads inputs from the joy topic and outputs them on topics that teleoperate the robot’s base.
-4. `python pd_controller.py`: This python script starts a node that reads messages from the `/waypoint` topic (waypoints from the model) and outputs velocities to navigate the robot’s base.
-
-When the robot is finishing navigating, kill the `pd_controller.py` script, and then kill the tmux session. If you want to take control of the robot while it is navigating, the `joy_teleop.py` script allows you to do so with the joystick.
+### Notes
+The camera config says to use yuyv format which only has 2 channels. When running the stack with this, there is an error when transforming images, there are three values in 'mean' and 'std' which suggests they are working with 3 channels. For now I have switched the camera to run with 3 channel images.
 
 
 ### Adapting this code to different robots

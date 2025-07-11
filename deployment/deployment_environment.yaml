@@ -1,18 +1,31 @@
-name: vint_deployment
+name: vint_deploy
 channels:
+- defaults
 - pytorch
 - conda-forge
 dependencies:
-- python=3.8.5
-- cudatoolkit=11.
-- torchvision
-- numpy
+- python=3.10
+- gcc_linux-64
+- gxx_linux-64
+- cudatoolkit=10.
+- numpy==1.26.4
 - matplotlib
-- pyyaml
-- rospkg
+- ipykernel
+- pip
 - pip:
   - torch
   - torchvision
-  - efficientnet_pytorch
-  - warmup_scheduler
-  - diffusers==0.11.1
+  - tqdm==4.64.0
+  - git+https://github.com/ildoonet/pytorch-gradual-warmup-lr.git
+  - opencv-python==4.6.0.66
+  - h5py==3.6.0
+  - wandb==0.12.18
+  - --extra-index-url https://rospypi.github.io/simple/
+  - roslz4
+  - prettytable
+  - efficientnet-pytorch
+  - warmup-scheduler
+  - diffusers==0.34.0
+  - lmdb
+  - vit-pytorch
+  - positional-encodings

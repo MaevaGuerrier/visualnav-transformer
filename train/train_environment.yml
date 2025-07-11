@@ -2,10 +2,13 @@ name: nomad_train
 channels:
 - defaults
 - pytorch
+- conda-forge
 dependencies:
-- python=3.8.5
+- python=3.10
+- gcc_linux-64
+- gxx_linux-64
 - cudatoolkit=10.
-- numpy
+- numpy==1.26.4
 - matplotlib
 - ipykernel
 - pip
@@ -18,12 +21,11 @@ dependencies:
   - h5py==3.6.0
   - wandb==0.12.18
   - --extra-index-url https://rospypi.github.io/simple/ 
-  - rosbag
   - roslz4
   - prettytable
   - efficientnet-pytorch
   - warmup-scheduler
-  - diffusers==0.11.1
+  - diffusers==0.34.0
   - lmdb 
   - vit-pytorch
   - positional-encodings

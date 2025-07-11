@@ -47,6 +47,8 @@ action:
   max_dist_cat: 10
 close_far_threshold: 10 # distance threshold used to seperate the close and the far  subgoals that are sampled per datapoint
 
+num_diffusion_iters: 10
+
 # action output params
 len_traj_pred: 5
 learn_angle: True
