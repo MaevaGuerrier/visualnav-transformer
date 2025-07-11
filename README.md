@@ -263,13 +263,14 @@ ros2 launch interbotix_rover_robot_server interbotix_rover_robot_server.launch.p
 
 To run the navigation script:
 ```
-python navigation.py <name of map>
+python navigation.py <name of map> -l <locobot_model>
 ```
 
 To run the explore script:
 ```
-python explore.py
+python explore.py -l <locobot_model>
 ```
+Where locobot_model can be locobot_wx250s, locobot_wx200 or locobot_px100.
 
 ### Notes
 The camera config says to use yuyv format which only has 2 channels. When running the stack with this, there is an error when transforming images, there are three values in 'mean' and 'std' which suggests they are working with 3 channels. For now I have switched the camera to run with 3 channel images.

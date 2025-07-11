@@ -42,6 +42,15 @@ class RobotNavigationController:
         self.context_queue = []
         self.context_size = None
 
+        self.robot_model = self.args.locobot_model
+
+        if self.robot_model == 'locobot_wx250s':
+            self.dof = 6
+        elif self.robot_model == 'locobot_px100':
+            self.dof = 4
+        else:
+            self.dof = 5
+
         self._setup_environment()
         self._setup_model()
 
@@ -56,12 +65,12 @@ class RobotNavigationController:
             'EmptyEnvironmentInterbotixRRob-v0',
             rs_address='127.0.0.1:50051',
             gui=True,
-            robot_model='locobot_wx250s',
+            robot_model=self.robot_model,
             with_camera=True
         )
 
         obs, _ = self.env.reset()
-        self.arm_joint_states = obs['state'][:6]
+        self.arm_joint_states = obs['state'][:self.dof]
 
     def _setup_model(self):
         """Load and configure the diffusion model."""
@@ -203,7 +212,12 @@ def main():
         type=int,
         help="Number of action samples from exploration model (default: 8)"
     )
-
+    parser.add_argument(
+        "--locobot-model", "-l",
+        default='locobot_wx250s',
+        type=str,
+        help="Locobot robot model"
+    )
     args = parser.parse_args()
 
     navigator = RobotNavigationController(args)
