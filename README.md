@@ -272,6 +272,30 @@ python explore.py -l <locobot_model>
 ```
 Where locobot_model can be locobot_wx250s, locobot_wx200 or locobot_px100.
 
+#### Crossformer
+
+I have put together a rough test script for running the crossformer model.
+It runs with the robot, actions are sent to the wheels. Not tested more than that.
+
+```
+cd ~/vint_ws/src/
+git clone git@github.com:rail-berkeley/crossformer.git
+cd ~/vint_ws/src/visualnav-transformer
+conda env create -f crossformer_environment.yml
+conda activate crossformer_env
+cd ~/vint_ws/src/crossformer
+pip install -e .
+pip install -r requirements.txt
+cd ~/vint_ws/src/robo-gym
+pip install -e .
+```
+
+Launch crossformer test script with:
+
+```
+python navigate_crossformer.py -l 'locobot_wx250s'
+```
+
 ### Notes
 The camera config says to use yuyv format which only has 2 channels. When running the stack with this, there is an error when transforming images, there are three values in 'mean' and 'std' which suggests they are working with 3 channels. For now I have switched the camera to run with 3 channel images.
 

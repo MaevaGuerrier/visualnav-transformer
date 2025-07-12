@@ -17,7 +17,8 @@ from PIL import Image as PILImage
 # Local imports
 from pd_controller import PDController
 from topic_names import IMAGE_TOPIC, WAYPOINT_TOPIC, SAMPLED_ACTIONS_TOPIC
-from utils import to_numpy, transform_images, load_model
+from utils import to_numpy, transform_images
+from vint_utils import load_model
 from vint_train.training.train_utils import get_action
 
 
