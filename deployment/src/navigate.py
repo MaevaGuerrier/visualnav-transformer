@@ -245,18 +245,29 @@ def main(args: argparse.Namespace):
                 batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
                 batch_goal_data = torch.cat(batch_goal_data, dim=0).to(device)
 
+                print("batch_obs_imgs shape:", batch_obs_imgs.shape)
+                print("batch_goal_data shape:", batch_goal_data.shape)
+
                 distances, waypoints = model(batch_obs_imgs, batch_goal_data)
                 distances = to_numpy(distances)
                 waypoints = to_numpy(waypoints)
+
+                print("distances shape:", distances.shape, "len:", len(distances))
+                print("waypoints shape:", waypoints.shape, "len:", len(waypoints))
+
                 # look for closest node
                 min_dist_idx = np.argmin(distances)
                 # chose subgoal and output waypoints
+                print("min dist idx:", min_dist_idx, "min dist:", distances[min_dist_idx], "close_threshold:", args.close_threshold)
                 if distances[min_dist_idx] > args.close_threshold:
+                    print("Not close enough to the next node, choosing closest waypoint", waypoints[min_dist_idx][args.waypoint], "at index", min_dist_idx)
                     chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
                     closest_node = start + min_dist_idx
                 else:
+                    print("Close enough to the next node, choosing next waypoint at ", min(min_dist_idx + 1, len(waypoints) - 1))
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
+                    print("closest start", start, "min_dist_idx + 1", min_dist_idx + 1, "goal_node", goal_node)
                     closest_node = min(start + min_dist_idx + 1, goal_node)
                 # print("chosen wp", chosen_waypoint)
                 print("min dist idx", min_dist_idx)

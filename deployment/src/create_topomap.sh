@@ -2,8 +2,8 @@
 
 # Failsafe to make sure that pip install -e has been executed
 # This is necessary to ensure that the package needed are present
-eval "$(conda shell.bash hook)"
-conda activate vint_deployment
+# eval "$(conda shell.bash hook)"
+# conda activate vint_deployment
 # Navigate to the directory containing the package
 cd /workspace/src/visualnav-transformer
 # Install the package in editable mode
@@ -28,8 +28,8 @@ tmux send-keys "roscore" Enter
 
 # Run the create_topoplan.py script with command line args in the second pane
 tmux select-pane -t 1
-tmux send-keys "conda activate vint_deployment" Enter
-tmux send-keys "python create_topomap.py --dt 1 --dir $1" Enter
+# tmux send-keys "conda activate vint_deployment" Enter
+tmux send-keys "python3 create_topomap.py --dt 1 --dir $1" Enter
 
 # Change the directory to ../topomaps/bags and run the rosbag play command in the third pane
 tmux select-pane -t 2
