@@ -14,7 +14,8 @@ dependencies:
   - torchvision
   - tqdm==4.64.0
   - git+https://github.com/ildoonet/pytorch-gradual-warmup-lr.git
-  - opencv-python==4.6.0.66
+  - git+https://github.com/real-stanford/diffusion_policy.git
+  - opencv-python==4.1.2.30 # https://github.com/robodhruv/visualnav-transformer/issues/27
   - h5py==3.6.0
   - wandb==0.12.18
   - --extra-index-url https://rospypi.github.io/simple/ 
@@ -27,6 +28,7 @@ dependencies:
   - lmdb 
   - vit-pytorch
   - positional-encodings
+  - huggingface_hub==0.23.5 # https://stackoverflow.com/questions/78787623/cannot-import-name-datasetfilter-from-huggingface-hub
 
 
 

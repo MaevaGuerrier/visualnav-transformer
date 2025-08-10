@@ -64,8 +64,11 @@ def main(config):
         cudnn.deterministic = True
 
     cudnn.benchmark = True  # good if input sizes don't vary
+    # The original authors just used ImageNet mean and std code https://pytorch.org/vision/0.9/transforms.html
+    # There is no explications here for why thoses values where chosen 
+    # According to the community those values are working for RGB images for ImageNet ("like many things in (deep) machine learning, it just happens to work well.")
     transform = ([
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), 
     ])
     transform = transforms.Compose(transform)
 
@@ -141,7 +144,7 @@ def main(config):
             batch_size=config["eval_batch_size"],
             shuffle=True,
             num_workers=0,
-            drop_last=False,
+            drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )
 
     # Create the model
@@ -390,7 +393,7 @@ if __name__ == "__main__":
         wandb.init(
             project=config["project_name"],
             settings=wandb.Settings(start_method="fork"),
-            entity="gnmv2", # TODO: change this to your wandb entity
+            entity="maeva_guerrier_rl", # TODO: change this to your wandb entity
         )
         wandb.save(args.config, policy="now")  # save the config file
         wandb.run.name = config["run_name"]

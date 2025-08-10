@@ -25,6 +25,11 @@ recon:
       p2: -0.001007
       k3: 0.0
 
+
+# metric_waypoint_spacing
+# https://github.com/robodhruv/visualnav-transformer/issues/10
+# Mean distance between two points, see https://github.com/robodhruv/visualnav-transformer/issues/10#issuecomment-1903533365
+
 scand:
   metric_waypoint_spacing: 0.38
 
