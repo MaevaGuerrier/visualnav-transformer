@@ -245,18 +245,29 @@ def main(args: argparse.Namespace):
                 batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
                 batch_goal_data = torch.cat(batch_goal_data, dim=0).to(device)
 
+                print("batch_obs_imgs shape:", batch_obs_imgs.shape)
+                print("batch_goal_data shape:", batch_goal_data.shape)
+
                 distances, waypoints = model(batch_obs_imgs, batch_goal_data)
                 distances = to_numpy(distances)
                 waypoints = to_numpy(waypoints)
+
+                print("distances shape:", distances.shape, "len:", distances)
+                print("waypoints shape:", waypoints.shape, "len:", waypoints)
+
                 # look for closest node
                 min_dist_idx = np.argmin(distances)
                 # chose subgoal and output waypoints
+                print("min dist idx:", min_dist_idx, "min dist:", distances[min_dist_idx], "close_threshold:", args.close_threshold)
                 if distances[min_dist_idx] > args.close_threshold:
+                    print("Not close enough to the next node, choosing closest waypoint", waypoints[min_dist_idx][args.waypoint], "at index", min_dist_idx)
                     chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
                     closest_node = start + min_dist_idx
                 else:
+                    print("Very far already a lost cause ", min(min_dist_idx + 1, len(waypoints) - 1))
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
+                    print("closest start", start, "min_dist_idx + 1", min_dist_idx + 1, "goal_node", goal_node)
                     closest_node = min(start + min_dist_idx + 1, goal_node)
                 # print("chosen wp", chosen_waypoint)
                 print("min dist idx", min_dist_idx)
@@ -264,14 +275,15 @@ def main(args: argparse.Namespace):
                 print(f"end {end} start {start}")
                 # Publish visualization messages
                 # Waypoint
-                # waypoint_msg_viz = PoseStamped()
-                # waypoint_msg_viz.header.frame_id = "odom"
-                # waypoint_msg_viz.header.stamp = rospy.Time.now()
-                # wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
-                # wp_position = Pose(position=wp_point)
-                # waypoint_msg_viz.pose = PoseStamped(
-                #     pose=wp_position)            
-                # waypoint_viz_pub.publish(waypoint_msg_viz)
+                waypoint_msg_viz = PoseStamped()
+                waypoint_msg_viz.header.frame_id = "odom"
+                waypoint_msg_viz.header.stamp = rospy.Time.now()
+                wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
+                # print("waypoint point:", wp_point)
+                wp_position = Pose(position=wp_point)
+                # print("waypoint position:", wp_position)
+                waypoint_msg_viz.pose = wp_position           
+                waypoint_viz_pub.publish(waypoint_msg_viz)
 
                 # Path
                 path_msg_viz = Path()
@@ -336,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--close-threshold",
         "-t",
-        default=3,
+        default=0.5,
         type=int,
         help="""temporal distance within the next node in the topomap before 
         localizing to it (default: 3)""",
