@@ -203,7 +203,7 @@ def main(args: argparse.Namespace):
                 sampled_actions_pub.publish(sampled_actions_msg)
                 naction = naction[0] 
                 chosen_waypoint = naction[args.waypoint]
-            else:
+            else: # THIS IS NOT NOAMD SO VINT OR GNM ? Its seems its using subgoal (Vint paper talked about subgoal -> subgoal candidates)
                 start = max(closest_node - args.radius, 0)
                 end = min(closest_node + args.radius + 1, goal_node)
                 distances = []

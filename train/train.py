@@ -25,6 +25,7 @@ from vint_train.models.vint.vint import ViNT
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
+
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
 
@@ -146,6 +147,10 @@ def main(config):
             num_workers=0,
             drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )
+
+
+    print("EXISTING BEFORE TRAINING")
+    exit()
 
     # Create the model
     if config["model_type"] == "gnm":

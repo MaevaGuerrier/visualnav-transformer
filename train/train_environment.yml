@@ -1,4 +1,4 @@
-name: nomad_train
+name: robodhruv_nomad
 channels:
 - defaults
 - pytorch
@@ -19,7 +19,6 @@ dependencies:
   - h5py==3.6.0
   - wandb==0.12.18
   - --extra-index-url https://rospypi.github.io/simple/ 
-  - rosbag
   - roslz4
   - prettytable
   - efficientnet-pytorch
