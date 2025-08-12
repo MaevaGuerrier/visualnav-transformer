@@ -252,8 +252,8 @@ def main(args: argparse.Namespace):
                 distances = to_numpy(distances)
                 waypoints = to_numpy(waypoints)
 
-                print("distances shape:", distances.shape, "len:", len(distances))
-                print("waypoints shape:", waypoints.shape, "len:", len(waypoints))
+                print("distances shape:", distances.shape, "len:", distances)
+                print("waypoints shape:", waypoints.shape, "len:", waypoints)
 
                 # look for closest node
                 min_dist_idx = np.argmin(distances)
@@ -264,7 +264,7 @@ def main(args: argparse.Namespace):
                     chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
                     closest_node = start + min_dist_idx
                 else:
-                    print("Close enough to the next node, choosing next waypoint at ", min(min_dist_idx + 1, len(waypoints) - 1))
+                    print("Very far already a lost cause ", min(min_dist_idx + 1, len(waypoints) - 1))
                     chosen_waypoint = waypoints[min(
                         min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
                     print("closest start", start, "min_dist_idx + 1", min_dist_idx + 1, "goal_node", goal_node)
@@ -275,14 +275,15 @@ def main(args: argparse.Namespace):
                 print(f"end {end} start {start}")
                 # Publish visualization messages
                 # Waypoint
-                # waypoint_msg_viz = PoseStamped()
-                # waypoint_msg_viz.header.frame_id = "odom"
-                # waypoint_msg_viz.header.stamp = rospy.Time.now()
-                # wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
-                # wp_position = Pose(position=wp_point)
-                # waypoint_msg_viz.pose = PoseStamped(
-                #     pose=wp_position)            
-                # waypoint_viz_pub.publish(waypoint_msg_viz)
+                waypoint_msg_viz = PoseStamped()
+                waypoint_msg_viz.header.frame_id = "odom"
+                waypoint_msg_viz.header.stamp = rospy.Time.now()
+                wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
+                # print("waypoint point:", wp_point)
+                wp_position = Pose(position=wp_point)
+                # print("waypoint position:", wp_position)
+                waypoint_msg_viz.pose = wp_position           
+                waypoint_viz_pub.publish(waypoint_msg_viz)
 
                 # Path
                 path_msg_viz = Path()
@@ -347,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--close-threshold",
         "-t",
-        default=3,
+        default=0.5,
         type=int,
         help="""temporal distance within the next node in the topomap before 
         localizing to it (default: 3)""",

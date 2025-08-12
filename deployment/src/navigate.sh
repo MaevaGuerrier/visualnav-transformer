@@ -5,8 +5,11 @@ img_topic=`sed -n 's/^IMAGE_TOPIC *= *"\(.*\)"/\1/p' topic_names.py`
 
 # Failsafe to make sure that pip install -e has been executed
 # This is necessary to ensure that the package needed are present
-eval "$(conda shell.bash hook)"
-conda activate vint_deployment
+# eval "$(conda shell.bash hook)"
+# conda activate vint_deployment
+
+source /opt/ros/noetic/setup.bash
+
 # Navigate to the directory containing the package
 cd /workspace/src/visualnav-transformer
 # Install the package in editable mode
@@ -30,19 +33,19 @@ tmux splitw -v -p 50 # split it into two halves
 tmux selectp -t 0    # go back to the first pane
 
 # Run the roslaunch command in the first pane
-tmux select-pane -t 0
-tmux send-keys "echo 'launch_file: $launch_file'" Enter
-tmux send-keys "roslaunch ${launch_pkg} ${launch_file}" Enter
+# tmux select-pane -t 0
+# tmux send-keys "echo 'launch_file: $launch_file'" Enter
+# tmux send-keys "roslaunch ${launch_pkg} ${launch_file}" Enter
 
 # Run the navigate.py script with command line args in the second pane
 tmux select-pane -t 1
-tmux send-keys "conda activate vint_deployment" Enter
-tmux send-keys "python navigate.py $@" Enter
+# tmux send-keys "conda activate vint_deployment" Enter
+tmux send-keys "python3 navigate.py $@" Enter
 
 # Run the pd_controller.py script in the fourth pane
 tmux select-pane -t 2
-tmux send-keys "conda activate vint_deployment" Enter
-tmux send-keys "python pd_controller.py" Enter
+# tmux send-keys "conda activate vint_deployment" Enter
+tmux send-keys "python3 pd_controller.py" Enter
 
 # Attach to the tmux session
 tmux -2 attach-session -t $session_name

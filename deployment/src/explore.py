@@ -176,7 +176,7 @@ def main(args: argparse.Namespace):
 
             # Path
             path_msg_viz = Path()
-            path_msg_viz.header.frame_id = "camera_link"
+            path_msg_viz.header.frame_id = "base_link"
             path_msg_viz.header.stamp = rospy.Time.now()
             path_msg_viz.poses.append(PoseStamped(pose=Pose(position=Point(x=chosen_waypoint[0], y=chosen_waypoint[1]))))
             path_viz_pub.publish(path_msg_viz)
