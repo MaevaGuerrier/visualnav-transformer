@@ -5,12 +5,7 @@
 # eval "$(conda shell.bash hook)"
 # conda activate vint_deployment
 # Navigate to the directory containing the package
-cd /workspace/src/visualnav-transformer
 # Install the package in editable mode
-pip install -e train/
-
-
-source /opt/ros/noetic/setup.bash
 
 # Change back the directory to the working dir with the navigate.py script
 cd /workspace/src/visualnav-transformer/deployment/src

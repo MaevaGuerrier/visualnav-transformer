@@ -24,7 +24,7 @@ class ROSData:
             self.data.append(data)
         self.last_time_received = rospy.get_time()
         
-    def is_valid(self, verbose: bool = False):
+    def is_valid(self, verbose: bool = True):
         time_waited = rospy.get_time() - self.last_time_received
         valid =  time_waited < self.timout
         if self.queue_size > 1:

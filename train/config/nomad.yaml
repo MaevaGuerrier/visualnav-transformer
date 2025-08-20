@@ -96,7 +96,7 @@ datasets:
     end_slack: 3 # because many trajectories end in collisions
     goals_per_obs: 1
     negative_mining: True
-  private datasets (uncomment if you have access)
+  # private datasets (uncomment if you have access)
   seattle:
     data_folder: /home/<username>/nomad_dataset/seattle/
     train: /home/<username>/data_splits/seattle/train/
