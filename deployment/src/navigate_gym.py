@@ -163,6 +163,15 @@ class TopomapNavigationController:
             input_goal_mask=mask.repeat(len(goal_images))
         )
 
+        # TODO debug images to debug robo-gym
+        debug_img_dir = f"../debug/"
+        if not os.path.exists(debug_img_dir):
+            os.makedirs(debug_img_dir)
+        for i, (obs_img, goal_img) in enumerate(zip(obs_images, goal_images)):
+            obs_img.save(f"{debug_img_dir}/obs_{i}.png")
+            goal_img.save(f"{debug_img_dir}/goal_{i}.png")
+
+
         dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
         dists = to_numpy(dists.flatten())
 
