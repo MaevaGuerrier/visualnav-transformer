@@ -121,6 +121,7 @@ class TopomapNavigationController:
 
     def _update_context_queue(self, new_image):
         """Update the context queue with a new observation."""
+        new_image = PILImage.fromarray(new_image)
         if len(self.context_queue) < self.context_size + 1:
             self.context_queue.append(new_image)
         else:
@@ -163,13 +164,13 @@ class TopomapNavigationController:
             input_goal_mask=mask.repeat(len(goal_images))
         )
 
-        # TODO debug images to debug robo-gym
-        debug_img_dir = f"../debug/"
-        if not os.path.exists(debug_img_dir):
-            os.makedirs(debug_img_dir)
-        for i, (obs_img, goal_img) in enumerate(zip(obs_images, goal_images)):
-            obs_img.save(f"{debug_img_dir}/obs_{i}.png")
-            goal_img.save(f"{debug_img_dir}/goal_{i}.png")
+        # # TODO debug images to debug robo-gym
+        # debug_img_dir = f"../debug/"
+        # if not os.path.exists(debug_img_dir):
+        #     os.makedirs(debug_img_dir)
+        # for i, (obs_img, goal_img) in enumerate(zip(obs_images, goal_images)):
+        #     obs_img.save(f"{debug_img_dir}/obs_{i}.png")
+        #     goal_img.save(f"{debug_img_dir}/goal_{i}.png")
 
 
         dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
@@ -274,7 +275,7 @@ class TopomapNavigationController:
 
         try:
             while not self.reached_goal:
-                obs, _, _, _, _= self.env.step(list(self.arm_joint_states) + [0, 0])
+                obs, _, _, _, _= self.env.step([0, 0])
                 current_image = obs['camera']
 
                 self._update_context_queue(current_image)
@@ -293,7 +294,7 @@ class TopomapNavigationController:
 
                 base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
 
-                action = list(self.arm_joint_states) + base_velocity_command
+                action = base_velocity_command
                 print(f'Executing action: {action}')
                 obs, _, _, _, _ = self.env.step(action)
 
@@ -330,7 +331,7 @@ def main():
     )
     parser.add_argument(
         "--dir", "-d",
-        default="top1",
+        default="bunk1_office_from_kitch_fisheye/",
         type=str,
         help="Path to topomap images directory (default: topomap)"
     )
@@ -342,13 +343,13 @@ def main():
     )
     parser.add_argument(
         "--close-threshold", "-t",
-        default=3,
+        default=0.5,
         type=int,
         help="Distance threshold for node localization (default: 3)"
     )
     parser.add_argument(
         "--radius", "-r",
-        default=4,
+        default=2,
         type=int,
         help="Number of local nodes to consider (default: 4)"
     )
@@ -359,7 +360,7 @@ def main():
         help="Number of action samples for NoMaD (default: 8)"
     )
     parser.add_argument(
-        "--robot-model", "-r",
+        "--robot-model", "-rb",
         default='bunker',
         type=str,
         help="bunker"
