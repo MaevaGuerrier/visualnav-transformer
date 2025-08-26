@@ -8,8 +8,8 @@ from typing import List
 import gymnasium as gym
 import numpy as np
 import robo_gym
-import torch
-import torch.nn as nn
+# import torch
+# import torch.nn as nn
 import yaml
 from PIL import Image as PILImage
 
@@ -25,8 +25,8 @@ class TopomapNavigationController:
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # print(f"Using device: {self.device}")
 
         self.robot_config = self._load_config("../config/robot.yaml")
         # self.model_configs = self._load_config("../config/models.yaml")
@@ -44,14 +44,8 @@ class TopomapNavigationController:
         self.normalize = True
         self.rng_key = jax.random.PRNGKey(42)
 
-        self.robot_model = self.args.locobot_model
+        self.robot_model = self.args.robot_model
 
-        if self.robot_model == 'locobot_wx250s':
-            self.dof = 6
-        elif self.robot_model == 'locobot_px100':
-            self.dof = 4
-        else:
-            self.dof = 5
 
         self.closest_node = 0
         self.reached_goal = False
@@ -68,19 +62,18 @@ class TopomapNavigationController:
     def _setup_environment(self):
         """Initialize the robo-gym environment."""
         self.env = gym.make(
-            'EmptyEnvironmentInterbotixRRob-v0',
+            'BunkerRRob-v0',
             rs_address='127.0.0.1:50051',
             gui=True,
             robot_model=self.robot_model,
-            with_camera=True
+            with_camera=True,
         )
 
         obs, _ = self.env.reset()
-        self.arm_joint_states = obs['state'][:self.dof]
 
     def _setup_model(self):
 
-        self.model = CrossFormerModel.load_pretrained("hf://rail-berkeley/crossformer")
+        self.model = CrossFormerModel.load_pretrained()
 
 
     def _load_topomap(self):
@@ -122,18 +115,18 @@ class TopomapNavigationController:
 
         goal_idx = min(self.closest_node + 1, self.goal_node)
         target_goal_image = self.topomap[goal_idx]
-
+        print("before pil numpy array")
         goal_img_np = pil_to_numpy_array(target_goal_image, target_size=(224, 224))
 
         goal_img_np = goal_img_np[None, ...]
         task = self.model.create_tasks(
             goals={"image_nav": goal_img_np})
-
+        print("after task")
         observation = self._prepare_crossformer_observation()
         self.rng_key, subkey = jax.random.split(self.rng_key)
-
+        print("after observation")
         action = self.model.sample_actions(observation, task, head_name="nav", rng=subkey)
-
+        print("after model prediction")
         action = np.array(action, dtype=np.float64)
 
         print(f"Sampled action: {action}")
@@ -197,7 +190,7 @@ class TopomapNavigationController:
 
         try:
             while not self.reached_goal:
-                obs, _, _, _, _= self.env.step(list(self.arm_joint_states) + [0, 0])
+                obs, _, _, _, _= self.env.step([0, 0])
                 current_image = obs['camera']
 
                 self._update_context_queue(current_image)
@@ -214,7 +207,7 @@ class TopomapNavigationController:
 
                 base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
 
-                action = list(self.arm_joint_states) + base_velocity_command
+                action = base_velocity_command
                 print(f'Executing action: {action}')
                 obs, _, _, _, _ = self.env.step(action)
 
@@ -237,12 +230,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run topological navigation on the Locobot"
     )
-    parser.add_argument(
-        "--model", "-m",
-        default="nomad",
-        type=str,
-        help="Model name (check ../config/models.yaml) (default: nomad)"
-    )
+    # parser.add_argument(
+    #     "--model", "-m",
+    #     default="nomad",
+    #     type=str,
+    #     help="Model name (check ../config/models.yaml) (default: nomad)"
+    # )
     parser.add_argument(
         "--waypoint", "-w",
         default=2,
@@ -251,7 +244,7 @@ def main():
     )
     parser.add_argument(
         "--dir", "-d",
-        default="map2",
+        default="bunk1_office_from_kitch_fisheye/",
         type=str,
         help="Path to topomap images directory (default: topomap)"
     )
@@ -263,7 +256,7 @@ def main():
     )
     parser.add_argument(
         "--close-threshold", "-t",
-        default=3,
+        default=0.5,
         type=int,
         help="Distance threshold for node localization (default: 3)"
     )
@@ -280,10 +273,10 @@ def main():
         help="Number of action samples for NoMaD (default: 8)"
     )
     parser.add_argument(
-        "--locobot-model", "-l",
-        default='locobot_wx250s',
+        "--robot-model", "-rb",
+        default='bunker',
         type=str,
-        help="Locobot robot model"
+        help="bunker"
     )
     args = parser.parse_args()
 
