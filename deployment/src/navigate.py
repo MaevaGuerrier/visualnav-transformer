@@ -1,375 +1,496 @@
-#!/usr/bin/env python3
-
-import argparse
+import matplotlib.pyplot as plt
 import os
-import time
-from typing import List
-
-import gymnasium as gym
+from typing import Tuple, Sequence, Dict, Union, Optional, Callable
 import numpy as np
-import robo_gym
 import torch
 import torch.nn as nn
-import yaml
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from PIL import Image as PILImage
 
-# Local imports
-from pd_controller import PDController
-from topic_names import IMAGE_TOPIC, WAYPOINT_TOPIC, SAMPLED_ACTIONS_TOPIC
-from utils import to_numpy, transform_images
-from vint_utils import load_model
+
+from cv_bridge import CvBridge
+import cv2
+
+
+
+import matplotlib.pyplot as plt
+import yaml
+
+# ROS
+import rospy
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import PoseStamped, Pose, Point
+from std_msgs.msg import Bool, Float32MultiArray
+from nav_msgs.msg import Path
+from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg, pil_to_numpy_array
+from vint_utils import plot_trajs_and_points_on_image
+
 from vint_train.training.train_utils import get_action
+import torch
+from PIL import Image as PILImage
+import numpy as np
+import argparse
+import yaml
+import time
+from visualization_msgs.msg import Marker, MarkerArray
+
+# UTILS
+from topic_names import (IMAGE_TOPIC,
+                        WAYPOINT_TOPIC,
+                        SAMPLED_ACTIONS_TOPIC)
 
 
-class TopomapNavigationController:
-    """Navigation controller using topological maps."""
+# CONSTANTS
+TOPOMAP_IMAGES_DIR = "../topomaps/images"
+MODEL_WEIGHTS_PATH = "../model_weights"
+ROBOT_CONFIG_PATH ="../config/robot.yaml"
+MODEL_CONFIG_PATH = "../config/models.yaml"
+with open(ROBOT_CONFIG_PATH, "r") as f:
+    robot_config = yaml.safe_load(f)
+MAX_V = robot_config["max_v"]
+MAX_W = robot_config["max_w"]
+RATE = robot_config["frame_rate"] 
 
-    def __init__(self, args: argparse.Namespace):
-        self.args = args
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
+# GLOBALS
+context_queue = []
+context_size = None  
+subgoal = []
 
-        self.robot_config = self._load_config("../config/robot.yaml")
-        self.model_configs = self._load_config("../config/models.yaml")
+# Load the model 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
 
-        self.max_v = self.robot_config["max_v"]
-        self.max_w = self.robot_config["max_w"]
-        self.rate = self.robot_config["frame_rate"]
+bridge = CvBridge()
 
-        self.controller = PDController()
-        self.model = None
-        self.noise_scheduler = None
-        self.context_queue = []
-        self.context_size = None
 
-        self.robot_model = self.args.locobot_model
 
-        if self.robot_model == 'locobot_wx250s':
-            self.dof = 6
-        elif self.robot_model == 'locobot_px100':
-            self.dof = 4
+def callback_obs(msg):
+    obs_img = msg_to_pil(msg)
+    if context_size is not None:
+        if len(context_queue) < context_size + 1:
+            context_queue.append(obs_img)
         else:
-            self.dof = 5
+            context_queue.pop(0)
+            context_queue.append(obs_img)
 
-        self.closest_node = 0
-        self.reached_goal = False
+def make_path_marker(points, marker_id, r, g, b, frame_id="base_link"):
+    marker = Marker()
+    marker.header.frame_id = frame_id
+    marker.header.stamp = rospy.Time.now()
+    marker.ns = "multi_paths"
+    marker.id = marker_id
+    marker.type = Marker.LINE_STRIP
+    marker.action = Marker.ADD
 
-        self._setup_environment()
-        self._setup_model()
-        self._load_topomap()
+    marker.scale.x = 0.05  # line width
+    marker.color.a = 1.0
+    marker.color.r = r
+    marker.color.g = g
+    marker.color.b = b
 
-    def _load_config(self, config_path: str) -> dict:
-        """Load YAML configuration file."""
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f)
+    for (x, y) in points:
+        p = Point()
+        p.x, p.y, p.z = x, y, 0.0
+        marker.points.append(p)
 
-    def _setup_environment(self):
-        """Initialize the robo-gym environment."""
-        self.env = gym.make(
-            'EmptyEnvironmentInterbotixRRob-v0',
-            rs_address='127.0.0.1:50051',
-            gui=True,
-            robot_model=self.robot_model,
-            with_camera=True
+    return marker
+
+def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
+    marker = Marker()
+    marker.header.frame_id = "base_link"   # or "odom", "base_link" depending on your TF
+    marker.header.stamp = rospy.Time.now()
+
+    marker.ns = "points"
+    marker.id = 0
+    marker.type = Marker.SPHERE
+    marker.action = Marker.ADD
+
+    # Example 2D point (x, y, z=0)
+    marker.pose.position.x = chosen_waypoint[0]
+    marker.pose.position.y = chosen_waypoint[1]
+    marker.pose.position.z = 0.0
+
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = 0.0
+    marker.pose.orientation.w = 1.0
+
+    # Sphere size
+    marker.scale.x = 0.1
+    marker.scale.y = 0.1
+    marker.scale.z = 0.1
+
+    # Color (red)
+    marker.color.a = 1.0  # alpha
+    marker.color.r = 1.0
+    marker.color.g = 0.0
+    marker.color.b = 0.0
+
+    waypoint_viz_pub.publish(marker)
+
+
+def main(args: argparse.Namespace):
+    global context_size
+
+
+
+
+
+     # load model parameters
+    with open(MODEL_CONFIG_PATH, "r") as f:
+        model_paths = yaml.safe_load(f)
+
+    model_config_path = model_paths[args.model]["config_path"]
+    with open(model_config_path, "r") as f:
+        model_params = yaml.safe_load(f)
+
+    
+    context_size = model_params["context_size"]
+    assert context_size != None
+
+    # load model weights
+    ckpth_path = model_paths[args.model]["ckpt_path"]
+    if os.path.exists(ckpth_path):
+        print(f"Loading model from {ckpth_path}")
+    else:
+        raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
+    model = load_model(
+        ckpth_path,
+        model_params,
+        device,
+    )
+    model = model.to(device)
+    model.eval()
+
+    
+     # load topomap
+    topomap_filenames = sorted(os.listdir(os.path.join(
+        TOPOMAP_IMAGES_DIR, args.dir)), key=lambda x: int(x.split(".")[0]))
+    topomap_dir = f"{TOPOMAP_IMAGES_DIR}/{args.dir}"
+    num_nodes = len(os.listdir(topomap_dir))
+    topomap = []
+    for i in range(num_nodes):
+        image_path = os.path.join(topomap_dir, topomap_filenames[i])
+        topomap.append(PILImage.open(image_path))
+
+    closest_node = 0
+    assert -1 <= args.goal_node < len(topomap), "Invalid goal index"
+    if args.goal_node == -1:
+        goal_node = len(topomap) - 1
+    else:
+        goal_node = args.goal_node
+    reached_goal = False
+
+     # ROS
+    rospy.init_node("EXPLORATION", anonymous=False)
+    rate = rospy.Rate(RATE)
+    image_curr_msg = rospy.Subscriber(
+        IMAGE_TOPIC, Image, callback_obs, queue_size=1)
+    waypoint_pub = rospy.Publisher(
+        WAYPOINT_TOPIC, Float32MultiArray, queue_size=1)  
+    waypoint_viz_pub = rospy.Publisher(
+        "viz_wp", PoseStamped, queue_size=1)
+    path_viz_pub = rospy.Publisher(
+        "viz_path", Path, queue_size=10)
+    sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
+    goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
+    goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
+    subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
+    closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
+    chosen_wp_viz_pub = rospy.Publisher('visualization_marker', Marker, queue_size=10)
+    all_path_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)
+    cam_wp_viz_pub = rospy.Publisher("/camera/waypoints_overlay", Image, queue_size=1)
+    # fancy_camera_pub = rospy.Publisher("/textured_quad", TexturedQuad, queue_size=1)
+
+
+    # print("Registered with master node. Waiting for image observations...")
+
+    if model_params["model_type"] == "nomad":
+        num_diffusion_iters = model_params["num_diffusion_iters"]
+        noise_scheduler = DDPMScheduler(
+            num_train_timesteps=model_params["num_diffusion_iters"],
+            beta_schedule='squaredcos_cap_v2',
+            clip_sample=True,
+            prediction_type='epsilon'
         )
+    # navigation loop
+    while not rospy.is_shutdown():
+        # EXPLORATION MODE
+        chosen_waypoint = np.zeros(4)
+        if len(context_queue) > model_params["context_size"]:
+            if model_params["model_type"] == "nomad":
+                obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
+                obs_images = torch.split(obs_images, 3, dim=1)
+                obs_images = torch.cat(obs_images, dim=1) 
+                obs_images = obs_images.to(device)
+                mask = torch.zeros(1).long().to(device)  
 
-        obs, _ = self.env.reset()
-        self.arm_joint_states = obs['state'][:self.dof]
+                start = max(closest_node - args.radius, 0)
+                end = min(closest_node + args.radius + 1, goal_node)
+                goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in topomap[start:end + 1]]
+                goal_image = torch.concat(goal_image, dim=0)
 
-    def _setup_model(self):
-        """Load and configure the diffusion model."""
+                obsgoal_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
+                dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+                dists = to_numpy(dists.flatten())
+                min_idx = np.argmin(dists)
+                closest_node = min_idx + start
+                print("closest node:", closest_node)
+                sg_idx = min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)
+                obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
 
-        model_config_path = self.model_configs[self.args.model]["config_path"]
-        model_params = self._load_config(model_config_path)
-        self.context_size = model_params["context_size"]
-
-        ckpt_path = self.model_configs[self.args.model]["ckpt_path"]
-
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"Model weights not found at {ckpt_path}")
-
-        print(f"Loading model from {ckpt_path}")
-        self.model = load_model(ckpt_path, model_params, self.device)
-        self.model.eval()
-
-        if model_params["model_type"] == "nomad":
-            self.noise_scheduler = DDPMScheduler(
-                num_train_timesteps=model_params["num_diffusion_iters"],
-                beta_schedule='squaredcos_cap_v2',
-                clip_sample=True,
-                prediction_type='epsilon'
-            )
-
-        self.model_params = model_params
-
-    def _load_topomap(self):
-        """Load topological map images."""
-        topomap_dir = f"../topomaps/images/{self.args.dir}"
-        if not os.path.exists(topomap_dir):
-            raise FileNotFoundError(f"Topomap directory not found: {topomap_dir}")
-
-        topomap_filenames = sorted(
-            os.listdir(topomap_dir),
-            key=lambda x: int(x.split(".")[0])
-        )
-
-        self.topomap = []
-        for filename in topomap_filenames:
-            image_path = os.path.join(topomap_dir, filename)
-            self.topomap.append(PILImage.open(image_path))
-
-        print(f"Loaded topomap with {len(self.topomap)} nodes")
-
-        if self.args.goal_node == -1:
-            self.goal_node = len(self.topomap) - 1
-        else:
-            assert 0 <= self.args.goal_node < len(self.topomap), "Invalid goal index"
-            self.goal_node = self.args.goal_node
-
-        print(f"Goal node: {self.goal_node}")
-
-    def _update_context_queue(self, new_image):
-        """Update the context queue with a new observation."""
-        if len(self.context_queue) < self.context_size + 1:
-            self.context_queue.append(new_image)
-        else:
-            self.context_queue.pop(0)
-            self.context_queue.append(new_image)
-
-
-    def _predict_actions_nomad(self) -> np.ndarray:
-        """Predict actions using NoMaD model."""
-        # Transform observation images
-        obs_images = transform_images(
-            self.context_queue,
-            self.model_params["image_size"],
-            center_crop=False
-        )
-        obs_images = torch.split(obs_images, 3, dim=1)
-        obs_images = torch.cat(obs_images, dim=1)
-        obs_images = obs_images.to(self.device)
-
-        mask = torch.zeros(1).long().to(self.device)
-
-        start = max(self.closest_node - self.args.radius, 0)
-        end = min(self.closest_node + self.args.radius + 1, self.goal_node)
-
-        goal_images = []
-        for g_img in self.topomap[start:end + 1]:
-            goal_img = transform_images(
-                g_img,
-                self.model_params["image_size"],
-                center_crop=False
-            ).to(self.device)
-            goal_images.append(goal_img)
-
-        goal_images = torch.cat(goal_images, dim=0)
-
-        obsgoal_cond = self.model(
-            'vision_encoder',
-            obs_img=obs_images.repeat(len(goal_images), 1, 1, 1),
-            goal_img=goal_images,
-            input_goal_mask=mask.repeat(len(goal_images))
-        )
-
-        dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-        dists = to_numpy(dists.flatten())
-
-        min_idx = np.argmin(dists)
-        self.closest_node = min_idx + start
-        print(f"Closest node: {self.closest_node}, distance: {dists[min_idx]:.3f}")
-
-        sg_idx = min(min_idx + int(dists[min_idx] < self.args.close_threshold), len(obsgoal_cond) - 1)
-        obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
-
-        with torch.no_grad():
-            if len(obs_cond.shape) == 2:
-                obs_cond = obs_cond.repeat(self.args.num_samples, 1)
-            else:
-                obs_cond = obs_cond.repeat(self.args.num_samples, 1, 1)
-
-            noisy_action = torch.randn(
-                (self.args.num_samples, self.model_params["len_traj_pred"], 2),
-                device=self.device
-            )
-
-            num_diffusion_iters = self.model_params["num_diffusion_iters"]
-            self.noise_scheduler.set_timesteps(num_diffusion_iters)
-
-            start_time = time.time()
-            for k in self.noise_scheduler.timesteps:
-                noise_pred = self.model(
-                    'noise_pred_net',
-                    sample=noisy_action,
-                    timestep=k,
-                    global_cond=obs_cond
-                )
-
-                noisy_action = self.noise_scheduler.step(
-                    model_output=noise_pred,
-                    timestep=k,
-                    sample=noisy_action
-                ).prev_sample
-
-            inference_time = time.time() - start_time
-            print(f"Diffusion inference time: {inference_time:.3f}s")
-
-        return to_numpy(get_action(noisy_action))
-
-    def _predict_actions_vint(self) -> np.ndarray:
-        """Predict actions using ViNT model."""
-        # Get local topomap nodes within radius
-        start = max(self.closest_node - self.args.radius, 0)
-        end = min(self.closest_node + self.args.radius + 1, self.goal_node)
-
-        distances = []
-        waypoints = []
-        batch_obs_imgs = []
-        batch_goal_data = []
-
-        for sg_img in self.topomap[start:end + 1]:
-            transf_obs_img = transform_images(
-                self.context_queue,
-                self.model_params["image_size"]
-            )
-            goal_data = transform_images(
-                sg_img,
-                self.model_params["image_size"]
-            )
-            batch_obs_imgs.append(transf_obs_img)
-            batch_goal_data.append(goal_data)
-
-        # Predict distances and waypoints
-        batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(self.device)
-        batch_goal_data = torch.cat(batch_goal_data, dim=0).to(self.device)
-
-        distances, waypoints = self.model(batch_obs_imgs, batch_goal_data)
-        distances = to_numpy(distances)
-        waypoints = to_numpy(waypoints)
-
-        min_dist_idx = np.argmin(distances)
-
-        # Select subgoal and waypoint
-        if distances[min_dist_idx] > self.args.close_threshold:
-            chosen_waypoint = waypoints[min_dist_idx][self.args.waypoint]
-            self.closest_node = start + min_dist_idx
-        else:
-            chosen_waypoint = waypoints[min(min_dist_idx + 1, len(waypoints) - 1)][self.args.waypoint]
-            self.closest_node = min(start + min_dist_idx + 1, self.goal_node)
-
-        print(f"Closest node: {self.closest_node}, distance: {distances[min_dist_idx]:.3f}")
-
-        return np.array([[chosen_waypoint]])
-
-    def _get_base_velocity_command(self, waypoint: np.ndarray) -> List[float]:
-        """Convert waypoint to base velocity command."""
-        if self.model_params["normalize"]:
-            waypoint[:2] *= (self.max_v / self.rate)
-        return self.controller.get_velocity(waypoint)
-
-    def run(self):
-        """Main navigation loop."""
-        print("Starting topological navigation...")
-        print(f"Goal: reach node {self.goal_node}")
-
-        try:
-            while not self.reached_goal:
-                obs, _, _, _, _= self.env.step(list(self.arm_joint_states) + [0, 0])
-                current_image = obs['camera']
-
-                self._update_context_queue(current_image)
-
-                chosen_waypoint = np.zeros(4)
-
-                if len(self.context_queue) > self.context_size:
-
-                    if self.model_params["model_type"] == "nomad":
-                        predicted_actions = self._predict_actions_nomad()
-                        chosen_waypoint = predicted_actions[0][self.args.waypoint]
+                # infer action
+                with torch.no_grad():
+                    # encoder vision features
+                    if len(obs_cond.shape) == 2:
+                        obs_cond = obs_cond.repeat(args.num_samples, 1)
                     else:
-                        # Assume ViNT
-                        predicted_actions = self._predict_actions_vint()
-                        chosen_waypoint = predicted_actions[0][0]
+                        obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
+                    
+                    # initialize action from Gaussian noise
+                    noisy_action = torch.randn(
+                        (args.num_samples, model_params["len_traj_pred"], 2), device=device)
+                    naction = noisy_action
 
-                base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
+                    # init scheduler
+                    noise_scheduler.set_timesteps(num_diffusion_iters)
 
-                action = list(self.arm_joint_states) + base_velocity_command
-                print(f'Executing action: {action}')
-                obs, _, _, _, _ = self.env.step(action)
+                    start_time = time.time()
+                    for k in noise_scheduler.timesteps[:]:
+                        # predict noise
+                        noise_pred = model(
+                            'noise_pred_net',
+                            sample=naction,
+                            timestep=k,
+                            global_cond=obs_cond
+                        )
+                        # inverse diffusion step (remove noise)
+                        naction = noise_scheduler.step(
+                            model_output=noise_pred,
+                            timestep=k,
+                            sample=naction
+                        ).prev_sample
+                    print("time elapsed:", time.time() - start_time)
 
-                self.reached_goal = (self.closest_node == self.goal_node)
-                if self.reached_goal:
-                    print("Goal reached!")
-                    break
+                naction = to_numpy(get_action(naction))
+                sampled_actions_msg = Float32MultiArray()
+                sampled_actions_msg.data = np.concatenate((np.array([0]), naction.flatten()))
+                print("published sampled actions")
+                sampled_actions_pub.publish(sampled_actions_msg)
+                # print(f"shape of naction: {naction.shape}, naction: {naction}")
+                naction_selected = naction[0] 
+                # print(f"batch reduce? {naction}")
 
-                time.sleep(0.1)
+                # # TODO CLEANUP MAKE A FUNC OR SMT
+                # save images 
+                cv2.imwrite(f"../debug/obs_img.png", pil_to_numpy_array(context_queue[-1], target_size=(224,224)))
+                print(naction[0:2])
+                exit()
+                
+                # plot_trajs_and_points_on_image(
+                #     img=context_queue[-1],
+                #     list_trajs=naction,
+                #     pub=True,
+                # )
 
-        except KeyboardInterrupt:
-            print("\nNavigation stopped by user")
-        except Exception as e:
-            print(f"Error during navigation: {e}")
-            raise
+                chosen_waypoint = naction_selected[args.waypoint]
+                viz_chosen_wp(chosen_waypoint, chosen_wp_viz_pub)
+
+                # path_msg_viz = Path()
+                # path_msg_viz.header.frame_id = "base_link"
+                # path_msg_viz.header.stamp = rospy.Time.now()
+                # for wp in naction:
+                #     path_msg_viz.poses.append(PoseStamped(
+                #         pose=Pose(position=Point(x=wp[0], y=wp[1]))))
+                
+                # path_viz_pub.publish(path_msg_viz)
+                ma = MarkerArray()
+                for idx, paths in enumerate(naction):
+                    r = 0.0
+                    g = 0.0
+                    b = 1.0
+                    marker = make_path_marker(
+                        paths, idx, r, g, b, frame_id="base_link")
+                    ma.markers.append(marker)
+                all_path_pub.publish(ma)                
 
 
-def main():
-    """Main function to parse arguments and run navigation."""
-    parser = argparse.ArgumentParser(
-        description="Run topological navigation on the Locobot"
-    )
-    parser.add_argument(
-        "--model", "-m",
-        default="nomad",
-        type=str,
-        help="Model name (check ../config/models.yaml) (default: nomad)"
-    )
-    parser.add_argument(
-        "--waypoint", "-w",
-        default=2,
-        type=int,
-        help="Index of waypoint for navigation (default: 2)"
-    )
-    parser.add_argument(
-        "--dir", "-d",
-        default="top1",
-        type=str,
-        help="Path to topomap images directory (default: topomap)"
-    )
-    parser.add_argument(
-        "--goal-node", "-g",
-        default=-1,
-        type=int,
-        help="Goal node index (-1 for last node) (default: -1)"
-    )
-    parser.add_argument(
-        "--close-threshold", "-t",
-        default=3,
-        type=int,
-        help="Distance threshold for node localization (default: 3)"
-    )
-    parser.add_argument(
-        "--radius", "-r",
-        default=4,
-        type=int,
-        help="Number of local nodes to consider (default: 4)"
-    )
-    parser.add_argument(
-        "--num-samples", "-n",
-        default=8,
-        type=int,
-        help="Number of action samples for NoMaD (default: 8)"
-    )
-    parser.add_argument(
-        "--locobot-model", "-l",
-        default='locobot_wx250s',
-        type=str,
-        help="Locobot robot model"
-    )
-    args = parser.parse_args()
+                # traj_colors = [(0,255,255), (255,0,255)] 
+                # img = context_queue[-1]
+                # img = pil_to_numpy_array(img.copy())
+                # img_overlay = overlay_trajectories(img, naction, traj_colors)
+                # ros_img = bridge.cv2_to_imgmsg(img_overlay, encoding="bgr8")
+                # ros_img.header.stamp = rospy.Time.now()
+                # ros_img.header.frame_id = "camera"
+                # cam_wp_viz_pub.publish(ros_img)      
 
-    navigator = TopomapNavigationController(args)
-    navigator.run()
+
+
+            else: # THIS IS NOT NOAMD SO VINT OR GNM ? Its seems its using subgoal (Vint paper talked about subgoal -> subgoal candidates)
+                start = max(closest_node - args.radius, 0)
+                end = min(closest_node + args.radius + 1, goal_node)
+                distances = []
+                waypoints = []
+                batch_obs_imgs = []
+                batch_goal_data = []
+                
+                crop=True
+                for i, sg_img in enumerate(topomap[start: end + 1]):
+                    transf_obs_img = transform_images(context_queue, model_params["image_size"], center_crop=crop)
+                    goal_data = transform_images(sg_img, model_params["image_size"], center_crop=crop)
+                    batch_obs_imgs.append(transf_obs_img)
+                    batch_goal_data.append(goal_data)
+                    
+                goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=crop, return_img=True)
+                goal_img_msg = pil_to_msg(goal_img)
+                goal_img_msg.header.stamp = rospy.Time.now()
+                goal_img_msg.header.frame_id = "base_footprint"
+                goal_img_msg.encoding = "rgb8"
+                goal_img_pub.publish(goal_img_msg)
+
+                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=crop, return_img=True)
+                subgoal_img_msg = pil_to_msg(subgoal_img)
+                subgoal_img_msg.header.stamp = rospy.Time.now()
+                subgoal_img_msg.header.frame_id = "base_footprint"
+                subgoal_img_msg.encoding = "rgb8"
+                subgoal_img_pub.publish(subgoal_img_msg)
+
+
+                closest_node_img = transform_images(topomap[closest_node], model_params["image_size"], center_crop=crop, return_img=True)
+                closest_node_img_msg = pil_to_msg(closest_node_img)
+                closest_node_img_msg.header.stamp = rospy.Time.now()
+                closest_node_img_msg.header.frame_id = "base_footprint"
+                closest_node_img_msg.encoding = "rgb8"
+                closest_node_img_pub.publish(closest_node_img_msg)
+
+
+                # predict distances and waypoints
+                batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
+                batch_goal_data = torch.cat(batch_goal_data, dim=0).to(device)
+
+                print("batch_obs_imgs shape:", batch_obs_imgs.shape)
+                print("batch_goal_data shape:", batch_goal_data.shape)
+
+                distances, waypoints = model(batch_obs_imgs, batch_goal_data)
+                distances = to_numpy(distances)
+                waypoints = to_numpy(waypoints)
+
+                print("distances shape:", distances.shape, "len:", distances)
+                print("waypoints shape:", waypoints.shape, "len:", waypoints)
+
+                # look for closest node
+                min_dist_idx = np.argmin(distances)
+                # chose subgoal and output waypoints
+                print("min dist idx:", min_dist_idx, "min dist:", distances[min_dist_idx], "close_threshold:", args.close_threshold)
+                if distances[min_dist_idx] > args.close_threshold:
+                    print("Not close enough to the next node, choosing closest waypoint", waypoints[min_dist_idx][args.waypoint], "at index", min_dist_idx)
+                    chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
+                    closest_node = start + min_dist_idx
+                else:
+                    print("Very far already a lost cause ", min(min_dist_idx + 1, len(waypoints) - 1))
+                    chosen_waypoint = waypoints[min(
+                        min_dist_idx + 1, len(waypoints) - 1)][args.waypoint]
+                    print("closest start", start, "min_dist_idx + 1", min_dist_idx + 1, "goal_node", goal_node)
+                    closest_node = min(start + min_dist_idx + 1, goal_node)
+                # print("chosen wp", chosen_waypoint)
+                print("min dist idx", min_dist_idx)
+                print("closest node", closest_node)
+                print(f"end {end} start {start}")
+                # Publish visualization messages
+                # Waypoint
+                waypoint_msg_viz = PoseStamped()
+                waypoint_msg_viz.header.frame_id = "odom"
+                waypoint_msg_viz.header.stamp = rospy.Time.now()
+                wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
+                # print("waypoint point:", wp_point)
+                wp_position = Pose(position=wp_point)
+                # print("waypoint position:", wp_position)
+                waypoint_msg_viz.pose = wp_position           
+                waypoint_viz_pub.publish(waypoint_msg_viz)
+
+                # Path
+                path_msg_viz = Path()
+                path_msg_viz.header.frame_id = "base_footprint"
+                path_msg_viz.header.stamp = rospy.Time.now()
+                print("------")
+                for wp in waypoints[min_dist_idx]:
+                    # print("waypoint:", wp)
+                    path_msg_viz.poses.append(PoseStamped(
+                        pose=Pose(position=Point(x=wp[0], y=wp[1]))))
+                path_viz_pub.publish(path_msg_viz)
+                # for dist in distances:
+                    # print("distance:", dist)
+
+        # RECOVERY MODE
+        if model_params["normalize"]:
+            chosen_waypoint[:2] *= (MAX_V / RATE)  
+        waypoint_msg = Float32MultiArray()
+        waypoint_msg.data = chosen_waypoint
+        waypoint_pub.publish(waypoint_msg)
+
+        reached_goal = closest_node == goal_node
+        goal_pub.publish(reached_goal)
+        if reached_goal:
+            print("Reached goal! Stopping...")
+        rate.sleep()
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Code to run GNM DIFFUSION EXPLORATION on the locobot")
+    parser.add_argument(
+        "--model",
+        "-m",
+        default="nomad",
+        type=str,
+        help="model name (only nomad is supported) (hint: check ../config/models.yaml) (default: nomad)",
+    )
+    parser.add_argument(
+        "--waypoint",
+        "-w",
+        default=2, # close waypoints exihibit straight line motion (the middle waypoint is a good default)
+        type=int,
+        help=f"""index of the waypoint used for navigation (between 0 and 4 or 
+        how many waypoints your model predicts) (default: 2)""",
+    )
+    parser.add_argument(
+        "--dir",
+        "-d",
+        default="bunk1_office_23April",
+        type=str,
+        help="path to topomap images",
+    )
+    parser.add_argument(
+        "--goal-node",
+        "-g",
+        default=-1,
+        type=int,
+        help="""goal node index in the topomap (if -1, then the goal node is 
+        the last node in the topomap) (default: -1)""",
+    )
+    parser.add_argument(
+        "--close-threshold",
+        "-t",
+        default=0.5,
+        type=int,
+        help="""temporal distance within the next node in the topomap before 
+        localizing to it (default: 3)""",
+    )
+    parser.add_argument(
+        "--radius",
+        "-r",
+        default=2,
+        type=int,
+        help="""temporal number of locobal nodes to look at in the topopmap for
+        localization (default: 2)""",
+    )
+    parser.add_argument(
+        "--num-samples",
+        "-n",
+        default=8,
+        type=int,
+        help=f"Number of actions sampled from the exploration model (default: 8)",
+    )
+    args = parser.parse_args()
+    print(f"Using {device}")
+    main(args)
+

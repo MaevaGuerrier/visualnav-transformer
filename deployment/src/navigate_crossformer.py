@@ -92,7 +92,7 @@ class TopomapNavigationController:
             image_path = os.path.join(topomap_dir, filename)
             self.topomap.append(PILImage.open(image_path))
 
-        print(f"Loaded topomap with {len(self.topomap)} nodes")
+        # print(f"Loaded topomap with {len(self.topomap)} nodes")
 
         if self.args.goal_node == -1:
             self.goal_node = len(self.topomap) - 1
@@ -100,9 +100,17 @@ class TopomapNavigationController:
             assert 0 <= self.args.goal_node < len(self.topomap), "Invalid goal index"
             self.goal_node = self.args.goal_node
 
-        print(f"Goal node: {self.goal_node}")
+        # print(f"Goal node: {self.goal_node}")
 
     def _update_context_queue(self, new_image):
+        time_stamp = time.time()
+        debug_img = PILImage.fromarray(new_image)
+        debug_img_dir = f"../debug/"
+        if not os.path.exists(debug_img_dir):
+            os.makedirs(debug_img_dir)
+
+        debug_img.save(os.path.join(debug_img_dir, f"img_{time_stamp}.png"))
+
         """Update the context queue with a new observation."""
         if len(self.context_queue) < self.context_size + 1:
             self.context_queue.append(new_image)
@@ -115,24 +123,46 @@ class TopomapNavigationController:
 
         goal_idx = min(self.closest_node + 1, self.goal_node)
         target_goal_image = self.topomap[goal_idx]
-        print("before pil numpy array")
+        # print("before pil numpy array")
         goal_img_np = pil_to_numpy_array(target_goal_image, target_size=(224, 224))
 
         goal_img_np = goal_img_np[None, ...]
         task = self.model.create_tasks(
             goals={"image_nav": goal_img_np})
-        print("after task")
+        # print("after task")
         observation = self._prepare_crossformer_observation()
         self.rng_key, subkey = jax.random.split(self.rng_key)
-        print("after observation")
-        action = self.model.sample_actions(observation, task, head_name="nav", rng=subkey)
-        print("after model prediction")
+        # print("after observation")
+        start_time = time.time()
+
+####### TRYING THE UNORMALIZED STATISTICS COMMENT HERE IF NEEDED TO ACTUALLY RUN W/O ISSUES
+
+
+        print(self.model.dataset_statistics["omnimimic_gnm_dataset"]["action"].keys())
+
+        actions = self.model.sample_actions(
+            observation,
+            task,
+            head_name="nav",
+            unnormalization_statistics=self.model.dataset_statistics["omnimimic_gnm_dataset"]["action"],
+            rng=subkey,
+        )
+        actions = actions[0]  # remove batch
+#######################################
+
+
+        action = self.model.sample_actions(observation, task, head_name="nav", rng=)
+        # print("after model prediction")
         action = np.array(action, dtype=np.float64)
 
         print(f"Sampled action: {action}")
 
         if goal_idx > self.closest_node:
             self.closest_node = goal_idx
+
+
+        inference_time = time.time() - start_time
+        print(f"Diffusion inference time: {inference_time:.3f}s")
 
         return action
 
@@ -185,8 +215,8 @@ class TopomapNavigationController:
 
     def run(self):
         """Main navigation loop."""
-        print("Starting topological navigation...")
-        print(f"Goal: reach node {self.goal_node}")
+        # print("Starting topological navigation...")
+        # print(f"Goal: reach node {self.goal_node}")
 
         try:
             while not self.reached_goal:
@@ -211,6 +241,7 @@ class TopomapNavigationController:
                 print(f'Executing action: {action}')
                 obs, _, _, _, _ = self.env.step(action)
 
+                print(f"Closest node: {self.closest_node}")
                 self.reached_goal = (self.closest_node == self.goal_node)
                 if self.reached_goal:
                     print("Goal reached!")
@@ -244,7 +275,7 @@ def main():
     )
     parser.add_argument(
         "--dir", "-d",
-        default="bunk1_office_from_kitch_fisheye/",
+        default="lab_corridor",
         type=str,
         help="Path to topomap images directory (default: topomap)"
     )
@@ -256,7 +287,7 @@ def main():
     )
     parser.add_argument(
         "--close-threshold", "-t",
-        default=0.5,
+        default=3,
         type=int,
         help="Distance threshold for node localization (default: 3)"
     )
