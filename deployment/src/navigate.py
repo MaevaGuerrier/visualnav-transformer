@@ -22,7 +22,7 @@ from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray
 from nav_msgs.msg import Path
 from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg, pil_to_numpy_array
-from vint_utils import plot_trajs_and_points_on_image
+# from vint_utils import plot_trajs_and_points_on_image
 
 from vint_train.training.train_utils import get_action
 import torch
@@ -61,10 +61,134 @@ print("Using device:", device)
 
 bridge = CvBridge()
 
+# TODO 
+
+VIZ_IMAGE_SIZE = (640, 480)
+
+camera_matrix = np.array([
+    [262.459286,   1.916160, 327.699961],
+    [  0.000000, 263.419908, 224.459372],
+    [  0.000000,   0.000000,   1.000000]
+], dtype=np.float64)
+
+dist_coeffs = np.array([
+    -0.03727222045233312, 
+        0.007588870705292973,
+    -0.01666117486022043, 
+        0.00581938967971292
+], dtype=np.float64)
+
+
+def project_points(
+    xy: np.ndarray,
+    camera_height: float,
+    camera_x_offset: float,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+):
+    """
+    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
+    Args:
+        xy: array of shape (batch_size, horizon, 2) representing (x, y) coordinates
+    """
+    batch_size, horizon, _ = xy.shape
+
+    # create 3D coordinates with the camera positioned at the given height
+    xyz = np.concatenate(
+        [xy, camera_height * np.ones(list(xy.shape[:-1]) + [1])], axis=-1
+    )
+
+    # create dummy rotation and translation vectors
+    rvec = tvec = np.zeros((3, 1), dtype=np.float64)
+
+    xyz[..., 0] += camera_x_offset
+
+    # Convert from (x, y, z) to (y, -z, x) for cv2
+    xyz_cv = np.stack([xyz[..., 1], -xyz[..., 2], xyz[..., 0]], axis=-1)
+    
+    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
+    xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
+
+
+    # uv, _ = cv2.projectPoints(
+    #     xyz_cv.reshape(batch_size * horizon, 3), rvec, tvec, camera_matrix, dist_coeffs
+    # )
+    uv, _ = cv2.fisheye.projectPoints(
+        xyz_cv, rvec, tvec, camera_matrix, dist_coeffs
+    )
+    
+    uv = uv.reshape(batch_size, horizon, 2)
+    
+    
+    return uv
+
+def get_pos_pixels(
+    points: np.ndarray,
+    camera_height: float,
+    camera_x_offset: float,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    clip: bool = False,
+):
+    """
+    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
+    """
+    pixels = project_points(
+        points[np.newaxis], camera_height, camera_x_offset, camera_matrix, dist_coeffs
+    )[0]
+    # print(pixels)
+    # Flip image horizontally
+    pixels[:, 0] = VIZ_IMAGE_SIZE[0] - pixels[:, 0]
+
+    return pixels
+
+
+def plot_trajs_and_points_on_image(
+    img: np.ndarray,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    list_trajs: list,
+):
+    """
+    Plot trajectories and points on an image.
+    """
+    camera_height = 0.25
+    camera_x_offset = 0.10
+
+    for i, traj in enumerate(list_trajs):
+        xy_coords = traj[:, :2]
+        traj_pixels = get_pos_pixels(
+            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, clip=False
+        )
+        
+        
+        points = traj_pixels.astype(int).reshape(-1, 1, 2)
+        # print(f"points shape {points.shape}, traj_pixels shape {traj_pixels.shape}")
+        # print(points[0])
+        # print(points[:, :, ::-1][0])
+        # points = points[:, :, ::-1]
+        # Random color for each trajectory
+        color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
+
+        # inverting x,y axis so origin in image is down-left corner
+        points[:, :, 1] = VIZ_IMAGE_SIZE[1] - 1 - points[:, :, 1]
+
+        # Draw trajectory
+        cv2.polylines(img, [points], isClosed=False, color=color, thickness=3)
+
+        # Draw start point (green) and goal point (red)
+        # start = tuple(points[0, 0])
+        # goal = tuple(points[-1, 0])
+        # cv2.circle(img, start, 6, (0, 255, 0), -1)
+        # cv2.circle(img, goal, 6, (0, 0, 255), -1)
+
+    return img
+
 
 
 def callback_obs(msg):
     obs_img = msg_to_pil(msg)
+    # obs_img.save("../debug_viz/obs_img.png")
     if context_size is not None:
         if len(context_queue) < context_size + 1:
             context_queue.append(obs_img)
@@ -87,11 +211,13 @@ def make_path_marker(points, marker_id, r, g, b, frame_id="base_link"):
     marker.color.g = g
     marker.color.b = b
 
+    # print("---------------")
     for (x, y) in points:
         p = Point()
+        # print(f"x {x} y {y}")
         p.x, p.y, p.z = x, y, 0.0
         marker.points.append(p)
-
+    # print("---------------")
     return marker
 
 def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
@@ -130,12 +256,11 @@ def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
 
 def main(args: argparse.Namespace):
     global context_size
+    # load model parameters
+
+    fig, ax = plt.subplots()
 
 
-
-
-
-     # load model parameters
     with open(MODEL_CONFIG_PATH, "r") as f:
         model_paths = yaml.safe_load(f)
 
@@ -198,7 +323,7 @@ def main(args: argparse.Namespace):
     closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
     chosen_wp_viz_pub = rospy.Publisher('visualization_marker', Marker, queue_size=10)
     all_path_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)
-    cam_wp_viz_pub = rospy.Publisher("/camera/waypoints_overlay", Image, queue_size=1)
+    cam_wp_viz_pub = rospy.Publisher("/topoplan/wps_overlay_img", Image, queue_size=10)
     # fancy_camera_pub = rospy.Publisher("/textured_quad", TexturedQuad, queue_size=1)
 
 
@@ -228,6 +353,7 @@ def main(args: argparse.Namespace):
                 end = min(closest_node + args.radius + 1, goal_node)
                 goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in topomap[start:end + 1]]
                 goal_image = torch.concat(goal_image, dim=0)
+
 
                 obsgoal_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
                 dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
@@ -282,19 +408,63 @@ def main(args: argparse.Namespace):
 
                 # # TODO CLEANUP MAKE A FUNC OR SMT
                 # save images 
-                cv2.imwrite(f"../debug/obs_img.png", pil_to_numpy_array(context_queue[-1], target_size=(224,224)))
-                print(naction[0:2])
-                exit()
+                # cv2.imwrite(f"../debug/obs_img.png", pil_to_numpy_array(context_queue[-1], target_size=(224,224)))
+                # print(naction[0:2])
+                # exit()
                 
-                # plot_trajs_and_points_on_image(
-                #     img=context_queue[-1],
-                #     list_trajs=naction,
-                #     pub=True,
-                # )
+
 
                 chosen_waypoint = naction_selected[args.waypoint]
+                print(f"WAYPOINT WE VIZ VALUE {chosen_waypoint}")
                 viz_chosen_wp(chosen_waypoint, chosen_wp_viz_pub)
 
+                img = context_queue[-1]
+                img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE)
+
+                print("Image shape:", img.shape, "dtype:", img.dtype, "min:", img.min(), "max:", img.max())
+
+                # Ensure uint8
+                if img.dtype != np.uint8:
+                    img = (img * 255).astype(np.uint8)
+
+                # Convert RGB → BGR for OpenCV
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+                # # Draw a few obvious circles
+                # h, w = img.shape[:2]
+                # cv2.circle(img, (312, 224), 50, (0, 0, 255), -1)   # red
+                # cv2.circle(img, (w//2, h//2), 20, (0, 255, 255), -1) # yellow in center
+                # cv2.circle(img, (50, 50), 30, (255, 0, 255), -1)   # magenta in corner
+                # print("---------")
+                # print(naction)
+                # print("---------")
+                img = plot_trajs_and_points_on_image(
+                    img=img,
+                    camera_matrix=camera_matrix,
+                    dist_coeffs=dist_coeffs,
+                    list_trajs=naction,
+                )
+
+
+                # print(naction)
+                # fig, ax = plt.subplots()
+
+                # ax.set_xlim((0.5, VIZ_IMAGE_SIZE[0] - 0.5))
+                # ax.set_ylim((VIZ_IMAGE_SIZE[1] - 0.5, 0.5))
+                # ax.imshow(img)
+                # plt.savefig('../debug_viz/img_test2.png')
+
+
+                # Convert back to ROS image
+                ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
+                # cv_img = bridge.imgmsg_to_cv2(ros_img, desired_encoding="bgr8")
+                # cv2.imwrite("../debug_viz/img_ros_test2.png", cv_img)
+                # exit()
+                ros_img.header.stamp = rospy.Time.now()
+                ros_img.header.frame_id = "base_footprint"
+                # ros_img.encoding = "rgb8"
+                cam_wp_viz_pub.publish(ros_img)
+                            
                 # path_msg_viz = Path()
                 # path_msg_viz.header.frame_id = "base_link"
                 # path_msg_viz.header.stamp = rospy.Time.now()
@@ -426,6 +596,7 @@ def main(args: argparse.Namespace):
         waypoint_msg = Float32MultiArray()
         waypoint_msg.data = chosen_waypoint
         waypoint_pub.publish(waypoint_msg)
+        print(f"CHOSEN WAYPOINT NORMALIZED: {chosen_waypoint}")
 
         reached_goal = closest_node == goal_node
         goal_pub.publish(reached_goal)
