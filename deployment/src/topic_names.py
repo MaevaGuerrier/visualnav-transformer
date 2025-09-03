@@ -4,8 +4,11 @@
 FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"
 REVERSE_IMAGE_TOPIC = "/usb_cam_reverse/image_raw"
 IMAGE_TOPIC = "/usb_cam/image_raw"
-DEPTH_IMAGE_TOPIC = "/topoplan/depth_image"
+DEPTH_IMAGE_UNDISTORTED_TOPIC = "/topoplan/depth_image_undistorted"
+IMAGE_UNDISTORTED_TOPIC = "/topoplan/image_undistorted"
 COSTMAP_TOPIC = "/topoplan/costmap"
+BIRD_EYE_DEPTH_TOPIC = "/topoplan/bird_eye_depth"
+CAMERA_INFO_TOPIC = "/topoplan/camera_info_undistorted"
 
 # exploration topics
 SUBGOALS_TOPIC = "/subgoals"
