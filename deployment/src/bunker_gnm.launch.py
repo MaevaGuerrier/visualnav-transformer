@@ -1,6 +1,7 @@
 from launch import LaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
 from launch.actions import IncludeLaunchDescription
 
@@ -18,6 +19,12 @@ def generate_launch_description():
             ])
         ),
 
+        # Node(
+        #     package='usb_cam',
+        #     executable='usb_cam_node_exe',
+        #     name='usb_cam',
+        #     output='screen',
+        # ),
         
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
@@ -32,7 +39,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 PathJoinSubstitution([
-                    FindPackageShare('depthai_ros_driver'),
+                    FindPackageShare('usb_cam'),
                     'launch',
                     'camera.launch.py'
                 ])
