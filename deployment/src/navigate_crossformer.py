@@ -8,16 +8,54 @@ from typing import List
 import gymnasium as gym
 import numpy as np
 import robo_gym
+
 # import torch
 # import torch.nn as nn
 import yaml
 from PIL import Image as PILImage
 
 from pd_controller import PDController
-from utils import pil_to_numpy_array
+
+# from utils import pil_to_numpy_array
 import jax
 import numpy as np
 from crossformer.model.crossformer_model import CrossFormerModel
+
+
+def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
+    """Convert PIL image or numpy array to numpy array with proper formatting for Crossformer."""
+
+    if isinstance(image_input, PILImage.Image):
+
+        if image_input.size != target_size:
+            image_input = image_input.resize(target_size)
+        img_array = np.array(image_input)
+    elif isinstance(image_input, np.ndarray):
+
+        img_array = image_input.copy()
+
+        if img_array.shape[:2] != target_size:
+            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+            elif len(img_array.shape) == 2:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8), mode="L")
+            else:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+
+            pil_temp = pil_temp.resize(target_size)
+            img_array = np.array(pil_temp)
+    else:
+        raise ValueError(f"Unsupported input type: {type(image_input)}")
+
+    if len(img_array.shape) == 2:
+        img_array = np.stack([img_array] * 3, axis=-1)
+    elif img_array.shape[-1] == 4:
+        img_array = img_array[:, :, :3]
+
+    if img_array.dtype != np.uint8:
+        img_array = img_array.astype(np.uint8)
+
+    return img_array
 
 
 class TopomapNavigationController:
@@ -46,7 +84,6 @@ class TopomapNavigationController:
 
         self.robot_model = self.args.robot_model
 
-
         self.closest_node = 0
         self.reached_goal = False
 
@@ -62,8 +99,8 @@ class TopomapNavigationController:
     def _setup_environment(self):
         """Initialize the robo-gym environment."""
         self.env = gym.make(
-            'BunkerRRob-v0',
-            rs_address='127.0.0.1:50051',
+            "BunkerRRob-v0",
+            rs_address="192.168.1.23:50051",
             gui=True,
             robot_model=self.robot_model,
             with_camera=True,
@@ -72,9 +109,16 @@ class TopomapNavigationController:
         obs, _ = self.env.reset()
 
     def _setup_model(self):
-
-        self.model = CrossFormerModel.load_pretrained()
-
+        # self.model = CrossFormerModel.load_pretrained("hf://rail-berkeley/crossformer")
+        self.model = CrossFormerModel.load_pretrained(
+            "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
+        )
+        self.unnormalization_statistics = dict(
+            (stat_name, stat_value[:4, ...])
+            for (stat_name, stat_value) in self.model.dataset_statistics[
+                "omnimimic_gnm_dataset"
+            ]["action"].items()
+        )
 
     def _load_topomap(self):
         """Load topological map images."""
@@ -83,8 +127,7 @@ class TopomapNavigationController:
             raise FileNotFoundError(f"Topomap directory not found: {topomap_dir}")
 
         topomap_filenames = sorted(
-            os.listdir(topomap_dir),
-            key=lambda x: int(x.split(".")[0])
+            os.listdir(topomap_dir), key=lambda x: int(x.split(".")[0])
         )
 
         self.topomap = []
@@ -103,13 +146,13 @@ class TopomapNavigationController:
         # print(f"Goal node: {self.goal_node}")
 
     def _update_context_queue(self, new_image):
-        time_stamp = time.time()
-        debug_img = PILImage.fromarray(new_image)
-        debug_img_dir = f"../debug/"
-        if not os.path.exists(debug_img_dir):
-            os.makedirs(debug_img_dir)
+        # time_stamp = time.time()
+        # debug_img = PILImage.fromarray(new_image)
+        # debug_img_dir = f"../debug/"
+        # if not os.path.exists(debug_img_dir):
+        #     os.makedirs(debug_img_dir)
 
-        debug_img.save(os.path.join(debug_img_dir, f"img_{time_stamp}.png"))
+        # debug_img.save(os.path.join(debug_img_dir, f"img_{time_stamp}.png"))
 
         """Update the context queue with a new observation."""
         if len(self.context_queue) < self.context_size + 1:
@@ -118,40 +161,34 @@ class TopomapNavigationController:
             self.context_queue.pop(0)
             self.context_queue.append(new_image)
 
-
     def _predict_actions(self) -> np.ndarray:
 
         goal_idx = min(self.closest_node + 1, self.goal_node)
-        target_goal_image = self.topomap[goal_idx]
+        target_goal_image = self.topomap[-1]
         # print("before pil numpy array")
         goal_img_np = pil_to_numpy_array(target_goal_image, target_size=(224, 224))
 
         goal_img_np = goal_img_np[None, ...]
-        task = self.model.create_tasks(
-            goals={"image_nav": goal_img_np})
+        task = self.model.create_tasks(goals={"image_nav": goal_img_np})
         # print("after task")
         observation = self._prepare_crossformer_observation()
         self.rng_key, subkey = jax.random.split(self.rng_key)
         # print("after observation")
         start_time = time.time()
 
-####### TRYING THE UNORMALIZED STATISTICS COMMENT HERE IF NEEDED TO ACTUALLY RUN W/O ISSUES
+        ####### TRYING THE UNORMALIZED STATISTICS COMMENT HERE IF NEEDED TO ACTUALLY RUN W/O ISSUES
 
+        # print(self.model.dataset_statistics["omnimimic_gnm_dataset"]["action"].keys())
 
-        print(self.model.dataset_statistics["omnimimic_gnm_dataset"]["action"].keys())
+        #######################################
 
-        actions = self.model.sample_actions(
+        action = self.model.sample_actions(
             observation,
             task,
             head_name="nav",
-            unnormalization_statistics=self.model.dataset_statistics["omnimimic_gnm_dataset"]["action"],
             rng=subkey,
+            unnormalization_statistics=self.unnormalization_statistics,
         )
-        actions = actions[0]  # remove batch
-#######################################
-
-
-        action = self.model.sample_actions(observation, task, head_name="nav", rng=)
         # print("after model prediction")
         action = np.array(action, dtype=np.float64)
 
@@ -159,7 +196,6 @@ class TopomapNavigationController:
 
         if goal_idx > self.closest_node:
             self.closest_node = goal_idx
-
 
         inference_time = time.time() - start_time
         print(f"Diffusion inference time: {inference_time:.3f}s")
@@ -169,10 +205,7 @@ class TopomapNavigationController:
     def _prepare_crossformer_observation(self) -> dict:
         img_stack, timestep_mask = self._stack_and_pad(self.context_queue, max_length=5)
 
-        observation = {
-            "image_nav": img_stack,
-            "timestep_pad_mask": timestep_mask
-        }
+        observation = {"image_nav": img_stack, "timestep_pad_mask": timestep_mask}
 
         return observation
 
@@ -210,7 +243,7 @@ class TopomapNavigationController:
     def _get_base_velocity_command(self, waypoint: np.ndarray) -> List[float]:
         """Convert waypoint to base velocity command."""
         if self.normalize:
-            waypoint[:2] *= (self.max_v / self.rate)
+            waypoint[:2] *= self.max_v / self.rate
         return self.controller.get_velocity(waypoint)
 
     def run(self):
@@ -220,8 +253,8 @@ class TopomapNavigationController:
 
         try:
             while not self.reached_goal:
-                obs, _, _, _, _= self.env.step([0, 0])
-                current_image = obs['camera']
+                obs, _, _, _, _ = self.env.step([0, 0])
+                current_image = obs["camera"]
 
                 self._update_context_queue(current_image)
 
@@ -233,19 +266,19 @@ class TopomapNavigationController:
                     chosen_waypoint = predicted_actions[0][0]
                     chosen_waypoint = np.array(chosen_waypoint, dtype=np.float64)
                     if len(chosen_waypoint) == 2:
-                        chosen_waypoint = np.pad(chosen_waypoint, (0, 2), 'constant')
+                        chosen_waypoint = np.pad(chosen_waypoint, (0, 2), "constant")
 
                 base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
 
                 action = base_velocity_command
-                print(f'Executing action: {action}')
+                print(f"Executing action: {action}")
                 obs, _, _, _, _ = self.env.step(action)
 
                 print(f"Closest node: {self.closest_node}")
-                self.reached_goal = (self.closest_node == self.goal_node)
-                if self.reached_goal:
-                    print("Goal reached!")
-                    break
+                # self.reached_goal = self.closest_node == self.goal_node
+                # if self.reached_goal:
+                #     print("Goal reached!")
+                #     break
 
                 time.sleep(0.1)
 
@@ -268,46 +301,49 @@ def main():
     #     help="Model name (check ../config/models.yaml) (default: nomad)"
     # )
     parser.add_argument(
-        "--waypoint", "-w",
+        "--waypoint",
+        "-w",
         default=2,
         type=int,
-        help="Index of waypoint for navigation (default: 2)"
+        help="Index of waypoint for navigation (default: 2)",
     )
     parser.add_argument(
-        "--dir", "-d",
-        default="lab_corridor",
+        "--dir",
+        "-d",
+        default="new_lab",
         type=str,
-        help="Path to topomap images directory (default: topomap)"
+        help="Path to topomap images directory (default: topomap)",
     )
     parser.add_argument(
-        "--goal-node", "-g",
+        "--goal-node",
+        "-g",
         default=-1,
         type=int,
-        help="Goal node index (-1 for last node) (default: -1)"
+        help="Goal node index (-1 for last node) (default: -1)",
     )
     parser.add_argument(
-        "--close-threshold", "-t",
+        "--close-threshold",
+        "-t",
         default=3,
         type=int,
-        help="Distance threshold for node localization (default: 3)"
+        help="Distance threshold for node localization (default: 3)",
     )
     parser.add_argument(
-        "--radius", "-r",
+        "--radius",
+        "-r",
         default=4,
         type=int,
-        help="Number of local nodes to consider (default: 4)"
+        help="Number of local nodes to consider (default: 4)",
     )
     parser.add_argument(
-        "--num-samples", "-n",
+        "--num-samples",
+        "-n",
         default=8,
         type=int,
-        help="Number of action samples for NoMaD (default: 8)"
+        help="Number of action samples for NoMaD (default: 8)",
     )
     parser.add_argument(
-        "--robot-model", "-rb",
-        default='bunker',
-        type=str,
-        help="bunker"
+        "--robot-model", "-rb", default="bunker", type=str, help="bunker"
     )
     args = parser.parse_args()
 

@@ -38,9 +38,9 @@ tmux select-pane -t 0
 tmux send-keys "python3 navigate_crossformer.py $@" Enter
 
 # Run the pd_controller.py script in the fourth pane
-tmux select-pane -t 1
+# tmux select-pane -t 1
 # tmux send-keys "conda activate vint_deployment" Enter
-tmux send-keys "ros2 launch bunker_gnm.launch.py" Enter
+# tmux send-keys "ros2 launch bunker_gnm.launch.py" Enter
 
 # Attach to the tmux session
 tmux -2 attach-session -t $session_name
