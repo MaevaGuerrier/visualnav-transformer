@@ -1,0 +1,20 @@
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      plugin_names: ["obstacle_layer", "inflation_layer"]
+      plugin_types: ["nav2_costmap_2d::ObstacleLayer", "nav2_costmap_2d::InflationLayer"]
+
+      obstacle_layer:
+        observation_sources: scan
+        scan:
+          topic: /topoplan/scan
+          max_obstacle_height: 0.7
+          clearing: true
+          marking: true
+          data_type: LaserScan
+
+      inflation_layer:
+        inflation_radius: 0.3
+
+      always_send_full_costmap: true
