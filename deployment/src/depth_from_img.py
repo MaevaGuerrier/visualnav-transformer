@@ -147,9 +147,11 @@ class DepthAnythingNode:
 
     #     return birds_eye_map
 
-    def publish_camera_info_callback(self, camera_matrix, width, height, header):
+    def publish_camera_info(self, camera_matrix, width, height, header):
         msg = CameraInfo()
-        msg.header = header# Change if your camera frame has a different name
+        # msg.header = header# Change if your camera frame has a different name
+        msg.header.stamp = header.stamp
+        msg.header.frame_id = header.frame_id
 
         msg.width = width
         msg.height = height
@@ -165,7 +167,8 @@ class DepthAnythingNode:
         P = np.zeros((3, 4))
         P[:3, :3] = camera_matrix
         msg.P = P.flatten().tolist()
-
+        
+        # print(f"TIME IN MSG INFO: {msg.header.stamp}")
         self.pub_cam_info.publish(msg)
 
     def rgb_depth_callback(self, msg: Image):
@@ -173,31 +176,38 @@ class DepthAnythingNode:
 
             img_cv2 = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             height_img, width_img, _ = img_cv2.shape # H, W
+            # print(f"Received image of size: {width_img}x{height_img}")
 
             # Step 1: Undistort image (for fisheye camera)
             new_camera_matrix = self.camera_matrix.copy()
+            # TODO PUT BACK ITS FOR TEST WITH OAK PRO
             map_x, map_y = cv2.fisheye.initUndistortRectifyMap(
                 self.camera_matrix, self.distortion_coeffs, np.eye(3), new_camera_matrix, (width_img, height_img), cv2.CV_16SC2#CV_32FC1 TODO Look that up
             )
-            self.publish_camera_info_callback(new_camera_matrix, width_img, height_img, msg.header)
+            self.publish_camera_info(new_camera_matrix, width_img, height_img, msg.header)
             img_undistort = cv2.remap(img_cv2, map_x, map_y, interpolation=cv2.INTER_LINEAR)
 
-            # Crop
-            # cropped = crop_by_height(img_undistort, robot_height_ratio=0.6)
-
             # Depth inference
+            # IMAGE UNDISTORT PUT IT BACK IF USING FISHEYE
+            # img_undistort = img_cv2 # use for oak
             depth = self.depth_anything.infer_image(img_undistort, self.input_size)
 
-            # Normalize to 0-255
+            # # Normalize to 0-255
             depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
             depth = depth.astype(np.uint8)
 
             # Convert back to ROS Image and publish
+            # print(f"TIME IN RGB DEPT: {msg.header.stamp}")
             img_msg = self.bridge.cv2_to_imgmsg(img_undistort)
-            img_msg.header = msg.header
+            img_msg.header.stamp = msg.header.stamp
+            img_msg.header.frame_id = msg.header.frame_id
+
             depth_msg = self.bridge.cv2_to_imgmsg(depth)
-            depth_msg.header = msg.header
-            self.pub_undistort_depth.publish(depth_msg)
+            depth_msg.header.stamp = msg.header.stamp
+            depth_msg.header.frame_id = msg.header.frame_id
+
+
+            # self.pub_undistort_depth.publish(depth_msg)
             self.pub_undistort_img.publish(img_msg)
 
         except Exception as e:
@@ -217,7 +227,7 @@ class DepthAnythingNode:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DepthAnythingV2 ROS Node")
     # TODO just make a var
-    parser.add_argument("--encoder", type=str, default="vitb", choices=["vits", "vitb", "vitl", "vitg"])
+    parser.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl", "vitg"])
     parser.add_argument("--input-size", type=int, default=518)
     args = parser.parse_args()
 
