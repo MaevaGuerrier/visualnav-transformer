@@ -34,9 +34,11 @@ def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarr
     if isinstance(image_input, PILImage.Image):
 
         if image_input.size != target_size:
+            print(f"Resizing image from {image_input.size} to {target_size} PIL")
             image_input = image_input.resize(target_size)
         img_array = np.array(image_input)
     elif isinstance(image_input, np.ndarray):
+        print(f"Resizing image from {image_input.size} to {target_size} NDARRAY")
 
         img_array = image_input.copy()
 

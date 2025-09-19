@@ -51,9 +51,13 @@ MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
 
-VIZ_IMAGE_SIZE = (224, 224)
+VIZ_IMAGE_SIZE_FISHEYE = (224, 224)
+VIZ_IMAGE_SIZE_TRAV = (224, 224)
 
-camera_matrix = np.array([
+
+
+# TODO 
+camera_matrix_orig = np.array([
     [262.459286,   1.916160, 327.699961],
     [  0.000000, 263.419908, 224.459372],
     [  0.000000,   0.000000,   1.000000]
@@ -114,7 +118,14 @@ def _load_topomap(dir_path: str, goal_node: int) -> Tuple[List[PILImage.Image], 
 
 # VISUALIZATION
 
-def project_points(xy: np.ndarray, camera_height: float, camera_x_offset: float, camera_matrix: np.ndarray, dist_coeffs: np.ndarray):
+
+def project_points(
+    xy: np.ndarray,
+    camera_height: float,
+    camera_x_offset: float,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+):
     """
     Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
     Args:
@@ -135,7 +146,7 @@ def project_points(xy: np.ndarray, camera_height: float, camera_x_offset: float,
     # Convert from (x, y, z) to (y, -z, x) for cv2
     xyz_cv = np.stack([xyz[..., 1], -xyz[..., 2], xyz[..., 0]], axis=-1)
     
-    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3)
+    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
     xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
 
 
@@ -157,6 +168,7 @@ def get_pos_pixels(
     camera_x_offset: float,
     camera_matrix: np.ndarray,
     dist_coeffs: np.ndarray,
+    viz_img_size: Tuple[int, int],
 ):
     """
     Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
@@ -166,7 +178,7 @@ def get_pos_pixels(
     )[0]
     # print(pixels)
     # Flip image horizontally
-    pixels[:, 0] = VIZ_IMAGE_SIZE[0] - pixels[:, 0]
+    pixels[:, 0] = viz_img_size[0] - pixels[:, 0]
 
     return pixels
 
@@ -175,37 +187,49 @@ def plot_trajs_and_points_on_image(
     camera_matrix: np.ndarray,
     dist_coeffs: np.ndarray,
     list_trajs: list,
+    viz_img_size: Tuple[int, int],
+    resize_factor:bool=True, 
 ):
     """
     Plot trajectories and points on an image.
+    resize_factor: if True resize the image to viz_img_size. This is needed due to the fact that orginal image coming from fisheye is 640 x 480 and the traversability image is 224 x 224.
+    Thus the camera matrix needs to be scaled accordingly.
     """
     camera_height = 0.25
     camera_x_offset = 0.10
 
-    # TODO GO BACK TO HERE SOLVE THE ISSUE
-#       File "traversability_diffuser.py", line 638, in <module>
-#     main(args)
-#   File "traversability_diffuser.py", line 536, in main
-#     _publish_overlay_image(img, cam_wp_pub, naction)
-#   File "traversability_diffuser.py", line 394, in _publish_overlay_image
-#     img = plot_trajs_and_points_on_image(
-#   File "traversability_diffuser.py", line 186, in plot_trajs_and_points_on_image
-#     xy_coords = traj[:, :2]
-# IndexError: too many indices for array: array is 1-dimensional, but 2 were indexed
+    if resize_factor:
+        camera_matrix[0,0] *= .35
+        camera_matrix[0,2] *= .35
+        camera_matrix[1,1] *= .46
+        camera_matrix[1,2] *= .46
+
     for i, traj in enumerate(list_trajs):
-        rospy.logdebug(f"TRAJECTORIES: {traj}")
         xy_coords = traj[:, :2]
         traj_pixels = get_pos_pixels(
-            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs
+            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
         )
         
+        
         points = traj_pixels.astype(int).reshape(-1, 1, 2)
+        # print(f"points shape {points.shape}, traj_pixels shape {traj_pixels.shape}")
+        # print(points[0])
+        # print(points[:, :, ::-1][0])
+        # points = points[:, :, ::-1]
         # Random color for each trajectory
         color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
+
         # inverting x,y axis so origin in image is down-left corner
-        points[:, :, 1] = VIZ_IMAGE_SIZE[1] - 1 - points[:, :, 1]
+        points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
+
         # Draw trajectory
         cv2.polylines(img, [points], isClosed=False, color=color, thickness=3)
+
+        # Draw start point (green) and goal point (red)
+        # start = tuple(points[0, 0])
+        # goal = tuple(points[-1, 0])
+        # cv2.circle(img, start, 6, (0, 255, 0), -1)
+        # cv2.circle(img, goal, 6, (0, 0, 255), -1)
 
     return img
 
@@ -258,13 +282,14 @@ def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
     marker.scale.y = 0.1
     marker.scale.z = 0.1
 
-    # Color 
+    # Color (red)
     marker.color.a = 1.0  # alpha
-    marker.color.r = 0.0
-    marker.color.g = 1.0
+    marker.color.r = 1.0
+    marker.color.g = 0.0
     marker.color.b = 0.0
 
     waypoint_viz_pub.publish(marker)
+
 
 
 
@@ -392,10 +417,11 @@ def _callback_traversability_image(trav_img_msg: Image):
 # TODO TRY TO NOT HAVE THE GLOBAL
 overlay_traj_img = None
 def _callback_traversability_overlay_image(trav_img_msg: Image):
+    global overlay_traj_img
     overlay_traj_img = ros_numpy.numpify(trav_img_msg)
+    rospy.logdebug(f"Received traversability overlay image of shape: {overlay_traj_img.shape}")
 
-def _publish_overlay_image(img: np.ndarray, pub: rospy.Publisher, trajs: List[np.ndarray]):
-
+def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publisher, trajs: List[np.ndarray], viz_img_size: Tuple[int, int],):
     if img.dtype != np.uint8:
         img = (img * 255).astype(np.uint8)
 
@@ -404,15 +430,13 @@ def _publish_overlay_image(img: np.ndarray, pub: rospy.Publisher, trajs: List[np
 
     img = plot_trajs_and_points_on_image(
         img=img,
-        camera_matrix=camera_matrix,
+        camera_matrix=camera_matrix_orig,
         dist_coeffs=dist_coeffs,
         list_trajs=trajs,
+        viz_img_size=viz_img_size,
     )
 
     ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
-    # cv_img = bridge.imgmsg_to_cv2(ros_img, desired_encoding="bgr8")
-    # cv2.imwrite("../debug_viz/img_ros_test2.png", cv_img)
-    # exit()
     ros_img.header.stamp = rospy.Time.now()
     ros_img.header.frame_id = "base_footprint"
     pub.publish(ros_img)
@@ -425,8 +449,8 @@ def main(args: argparse.Namespace):
     rospy.init_node("traversability_diffusor", anonymous=True, log_level=args.log_level)
 
     # /wild_visual_navigation_visu_traversability_front/traversability_overlayed 
-    rospy.Subscriber("/wild_visual_navigation_node/front/traversability", Image, _callback_traversability_image) 
-    rospy.Subscriber("/wild_visual_navigation_visu_traversability_front/traversability_overlayed", Image, _callback_traversability_overlay_image)
+    rospy.Subscriber("/wild_visual_navigation_node/front/traversability", Image, _callback_traversability_image, queue_size=10) 
+    rospy.Subscriber("/wild_visual_navigation_visu_traversability_front/traversability_overlayed", Image, _callback_traversability_overlay_image, queue_size=10)
 
     # PUBLISHERS
     waypoint_pub = rospy.Publisher(WAYPOINT_TOPIC, Float32MultiArray, queue_size=1) 
@@ -436,9 +460,9 @@ def main(args: argparse.Namespace):
     # OVERLAY IMAGE
     # TODO BETTER NAMING TO UNDERSTAND
     cam_wp_pub = rospy.Publisher("/topoplan/wps_overlay_img", Image, queue_size=10) # not corrected action
-    cam_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_img", Image, queue_size=10)
+    # cam_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_img", Image, queue_size=10)
     trav_wp_pub = rospy.Publisher("/topoplan/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
-    trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
+    # trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
 
     rate = rospy.Rate(RATE)
 
@@ -524,8 +548,8 @@ def main(args: argparse.Namespace):
                 rospy.logdebug(f"time elapsed: {time.time() - start_time}")
 
             naction = to_numpy(get_action(naction))
-            naction = naction[0] 
-            chosen_waypoint = naction[args.waypoint]   
+            naction_selected = naction[0] 
+            chosen_waypoint = naction_selected[args.waypoint]   
             rospy.logdebug(f"Chosen waypoint: {chosen_waypoint}")             
 
                     # interval = 6
@@ -543,13 +567,14 @@ def main(args: argparse.Namespace):
             viz_chosen_wp(chosen_waypoint, chosen_wp_viz_pub)
 
             img = context_queue[-1]
-            img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE)
-            _publish_overlay_image(img, cam_wp_pub, naction)
+            img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
+            _publish_overlay_image(camera_matrix_orig, img, cam_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+
             # _publish_overlay_image(img, cam_corr_wp_pub, naction_corr)
             if overlay_traj_img is not None:
                 # _publish_overlay_image(overlay_traj_img, trav_corr_wp_pub, naction_corr) # SHOULD BE THE CORRECTED ACTION SO WE CAN COMPARE EASILY
-                _publish_overlay_image(trav_wp_pub, trav_corr_wp_pub, naction) # ORIG ACTION WITHOUT CORRECTION
-
+                rospy.logdebug(f"Publishing traversability overlay image with trajectories using overlay_traj of shape {overlay_traj_img.shape}")
+                _publish_overlay_image(camera_matrix_orig, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_TRAV) # ORIG ACTION WITHOUT CORRECTION
 
             ma = MarkerArray()
             for idx, paths in enumerate(naction):
