@@ -51,7 +51,7 @@ MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
 
-VIZ_IMAGE_SIZE_FISHEYE = (224, 224)
+VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
 VIZ_IMAGE_SIZE_TRAV = (224, 224)
 
 
@@ -188,7 +188,7 @@ def plot_trajs_and_points_on_image(
     dist_coeffs: np.ndarray,
     list_trajs: list,
     viz_img_size: Tuple[int, int],
-    resize_factor:bool=True, 
+    resize_factor:bool=False, 
 ):
     """
     Plot trajectories and points on an image.
@@ -198,11 +198,11 @@ def plot_trajs_and_points_on_image(
     camera_height = 0.25
     camera_x_offset = 0.10
 
-    if resize_factor:
-        camera_matrix[0,0] *= .35
-        camera_matrix[0,2] *= .35
-        camera_matrix[1,1] *= .46
-        camera_matrix[1,2] *= .46
+    # if resize_factor:
+    #     camera_matrix[0,0] *= .35
+    #     camera_matrix[0,2] *= .35
+    #     camera_matrix[1,1] *= .46
+    #     camera_matrix[1,2] *= .46
 
     for i, traj in enumerate(list_trajs):
         xy_coords = traj[:, :2]
@@ -210,6 +210,27 @@ def plot_trajs_and_points_on_image(
             xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
         )
         
+        if resize_factor:
+            traj_pixels[:,0] *= .35
+            traj_pixels[:,1] *= .46
+
+        # print(traj_pixels)
+                
+        valid = (
+            (traj_pixels[:, 0] >= 0) & (traj_pixels[:, 0] < viz_img_size[1]) &
+            (traj_pixels[:, 1] >= 0) & (traj_pixels[:, 1] < viz_img_size[0])
+        )
+
+        # valid is a boolean mask for each pixel
+        inside_pixels = traj_pixels[valid]
+
+        # Check if ALL are inside
+        all_inside = np.all(valid)
+
+        # Check if ANY are inside
+        any_inside = np.any(valid)
+
+        # print(f"Trajectory {i}: all inside: {all_inside}, any inside: {any_inside}, total points: {len(traj_pixels)}, inside points: {len(inside_pixels)}")
         
         points = traj_pixels.astype(int).reshape(-1, 1, 2)
         # print(f"points shape {points.shape}, traj_pixels shape {traj_pixels.shape}")
@@ -220,7 +241,10 @@ def plot_trajs_and_points_on_image(
         color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
 
         # inverting x,y axis so origin in image is down-left corner
-        points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
+        if resize_factor:
+            points[:, :, 1] = viz_img_size[1] * .46  - 1 - points[:, :, 1]
+        else:
+            points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
 
         # Draw trajectory
         cv2.polylines(img, [points], isClosed=False, color=color, thickness=3)
@@ -421,7 +445,7 @@ def _callback_traversability_overlay_image(trav_img_msg: Image):
     overlay_traj_img = ros_numpy.numpify(trav_img_msg)
     rospy.logdebug(f"Received traversability overlay image of shape: {overlay_traj_img.shape}")
 
-def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publisher, trajs: List[np.ndarray], viz_img_size: Tuple[int, int],):
+def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publisher, trajs: List[np.ndarray], viz_img_size: Tuple[int, int], resize_factor:bool=False ):
     if img.dtype != np.uint8:
         img = (img * 255).astype(np.uint8)
 
@@ -434,6 +458,7 @@ def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publi
         dist_coeffs=dist_coeffs,
         list_trajs=trajs,
         viz_img_size=viz_img_size,
+        resize_factor=resize_factor
     )
 
     ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
@@ -574,7 +599,7 @@ def main(args: argparse.Namespace):
             if overlay_traj_img is not None:
                 # _publish_overlay_image(overlay_traj_img, trav_corr_wp_pub, naction_corr) # SHOULD BE THE CORRECTED ACTION SO WE CAN COMPARE EASILY
                 rospy.logdebug(f"Publishing traversability overlay image with trajectories using overlay_traj of shape {overlay_traj_img.shape}")
-                _publish_overlay_image(camera_matrix_orig, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_TRAV) # ORIG ACTION WITHOUT CORRECTION
+                _publish_overlay_image(camera_matrix_orig, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
 
             ma = MarkerArray()
             for idx, paths in enumerate(naction):
