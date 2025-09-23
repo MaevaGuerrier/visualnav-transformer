@@ -7,6 +7,12 @@
 # See how to inflate to take into account the robot size
 # Replicate the diffusion head correction
 
+
+
+
+# TODO I CREATE A UTILS VIZ I HAVE TO REFACTOR 
+
+
 #!/usr/bin/env python3
 import yaml
 import argparse
@@ -15,17 +21,13 @@ import numpy as np
 from PIL import Image as PILImage
 from typing import List, Tuple, Dict, Any, Deque
 from collections import deque
-import cv2
-from cv_bridge import CvBridge
 import time
 
 # ROS
 import rospy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray
-import ros_numpy
 from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point
 
 # torch
 import torch
@@ -34,6 +36,9 @@ import torch.nn.functional as F
 # Utils
 from topic_names import (IMAGE_TOPIC, WAYPOINT_TOPIC, REACHED_GOAL_TOPIC)                 
 from utils import load_model, msg_to_pil, transform_images, to_numpy, pil_to_numpy_array
+from viz_utils import publish_overlay_image, viz_chosen_wp, make_marker_array
+from trav_utils import select_traj_best_traversability, traversabilityImageSubscriber
+
 
 # Diffusion
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -67,11 +72,6 @@ dist_coeffs = np.array([
     -0.01666117486022043, 
         0.00581938967971292
 ], dtype=np.float64)
-
-# Global variables (see if there is a better way to do this)
-
-trav_img = None
-bridge = CvBridge()
 
 
 def _load_model(model_name: str, device: torch.device, train: bool = False)-> Tuple["Model", Dict[str, Any]]:
@@ -112,243 +112,6 @@ def _load_topomap(dir_path: str, goal_node: int) -> Tuple[List[PILImage.Image], 
 
     return topomap, goal_node
 
-
-def project_points(
-    xy: np.ndarray,
-    camera_height: float,
-    camera_x_offset: float,
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-):
-    """
-    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
-    Args:
-        xy: array of shape (batch_size, horizon, 2) representing (x, y) coordinates
-    """
-    batch_size, horizon, _ = xy.shape
-
-    # create 3D coordinates with the camera positioned at the given height
-    xyz = np.concatenate(
-        [xy, camera_height * np.ones(list(xy.shape[:-1]) + [1])], axis=-1
-    )
-
-    # create dummy rotation and translation vectors
-    rvec = tvec = np.zeros((3, 1), dtype=np.float64)
-
-    xyz[..., 0] += camera_x_offset
-
-    # Convert from (x, y, z) to (y, -z, x) for cv2
-    xyz_cv = np.stack([xyz[..., 1], -xyz[..., 2], xyz[..., 0]], axis=-1)
-    
-    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
-    xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
-
-
-    # uv, _ = cv2.projectPoints(
-    #     xyz_cv.reshape(batch_size * horizon, 3), rvec, tvec, camera_matrix, dist_coeffs
-    # )
-    uv, _ = cv2.fisheye.projectPoints(
-        xyz_cv, rvec, tvec, camera_matrix, dist_coeffs
-    )
-    
-    uv = uv.reshape(batch_size, horizon, 2)
-    
-    
-    return uv
-
-
-def get_pos_pixels(
-    points: np.ndarray,
-    camera_height: float,
-    camera_x_offset: float,
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-    viz_img_size: Tuple[int, int],
-):
-    """
-    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
-    """
-    pixels = project_points(
-        points[np.newaxis], camera_height, camera_x_offset, camera_matrix, dist_coeffs
-    )[0]
-    # print(pixels)
-    # Flip image horizontally
-    pixels[:, 0] = viz_img_size[0] - pixels[:, 0]
-
-    return pixels
-
-
-def _get_traj_pixels_coords(
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-    list_trajs: list,
-    viz_img_size: Tuple[int, int],
-    resize_factor:bool=True):
-    
-    traj_pix_coords = []
-   
-    camera_height = 0.25
-    camera_x_offset = 0.10
-
-    for traj in list_trajs:
-        xy_coords = traj[:, :2]
-        traj_pixels = get_pos_pixels(
-            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
-        )
-        
-        if resize_factor: # Traversability image is 224 x 224 and the original fisheye image is 640 x 480
-            traj_pixels[:,0] *= .35
-            traj_pixels[:,1] *= .46
-
-        points = traj_pixels.astype(int).reshape(-1, 1, 2)
-
-        # inverting x,y axis so origin in image is down-left corner
-        if resize_factor:
-            points[:, :, 1] = viz_img_size[1] * .46  - 1 - points[:, :, 1]
-        else:
-            points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
-
-        # Draw trajectory
-        traj_pix_coords.append(points)
-
-    return traj_pix_coords
-
-
-def _select_traj_best_traversability(
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-    list_trajs: list,
-    viz_img_size: Tuple[int, int],
-    resize_factor:bool=True
-):
-    """
-    Select the trajectory with the best traversability score.
-    """
-    # TODO there might be a cleaner way to do this
-    if trav_img is None:
-        return None, None
-    
-    traj_pix_coords = _get_traj_pixels_coords(
-        camera_matrix, dist_coeffs, list_trajs, viz_img_size, resize_factor=resize_factor
-    )
-
-    best_traj = None
-    best_score = -np.inf
-
-    for traj, pix_coords in zip(list_trajs, traj_pix_coords):
-        score = 0.0
-        for point in pix_coords:
-            x, y = point[0]
-            score += trav_img[y, x] 
-        rospy.logdebug(f"Trajectory score: {score}")
-        if score > best_score:
-            best_score = score
-            best_traj = traj
-
-    return best_traj, best_score
-
-
-# TODO SEE IF YOU CAN CONDENSE CODE REFCTOR 
-def plot_trajs_and_points_on_image(
-    img: np.ndarray,
-    camera_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-    list_trajs: list,
-    viz_img_size: Tuple[int, int],
-    resize_factor:bool=False, 
-):
-    """
-    Plot trajectories and points on an image.
-    resize_factor: if True resize the image to viz_img_size. This is needed due to the fact that orginal image coming from fisheye is 640 x 480 and the traversability image is 224 x 224.
-    Thus the camera matrix needs to be scaled accordingly.
-    """
-    # TODO this has to be in yaml config
-    camera_height = 0.25
-    camera_x_offset = 0.10
-
-    for traj in list_trajs:
-        xy_coords = traj[:, :2]
-        traj_pixels = get_pos_pixels(
-            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
-        )
-        
-        if resize_factor: # Traversability image is 224 x 224 and the original fisheye image is 640 x 480
-            traj_pixels[:,0] *= .35
-            traj_pixels[:,1] *= .46
-
-        points = traj_pixels.astype(int).reshape(-1, 1, 2)
-
-        color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
-
-        # inverting x,y axis so origin in image is down-left corner
-        if resize_factor:
-            points[:, :, 1] = viz_img_size[1] * .46  - 1 - points[:, :, 1]
-        else:
-            points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
-
-        # Draw trajectory
-        cv2.polylines(img, [points], isClosed=False, color=color, thickness=2)
-
-    return img
-
-
-def make_path_marker(points, marker_id, r, g, b, frame_id="base_link"):
-    marker = Marker()
-    marker.header.frame_id = frame_id
-    marker.header.stamp = rospy.Time.now()
-    marker.ns = "multi_paths"
-    marker.id = marker_id
-    marker.type = Marker.LINE_STRIP
-    marker.action = Marker.ADD
-
-    marker.scale.x = 0.05  # line width
-    marker.color.a = 1.0
-    marker.color.r = r
-    marker.color.g = g
-    marker.color.b = b
-
-    # print("---------------")
-    for (x, y) in points:
-        p = Point()
-        # print(f"x {x} y {y}")
-        p.x, p.y, p.z = x, y, 0.0
-        marker.points.append(p)
-    # print("---------------")
-    return marker
-
-
-def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
-    marker = Marker()
-    marker.header.frame_id = "base_link"   # or "odom", "base_link" depending on your TF
-    marker.header.stamp = rospy.Time.now()
-
-    marker.ns = "points"
-    marker.id = 0
-    marker.type = Marker.SPHERE
-    marker.action = Marker.ADD
-
-    # Example 2D point (x, y, z=0)
-    marker.pose.position.x = chosen_waypoint[0]
-    marker.pose.position.y = chosen_waypoint[1]
-    marker.pose.position.z = 0.0
-
-    marker.pose.orientation.x = 0.0
-    marker.pose.orientation.y = 0.0
-    marker.pose.orientation.z = 0.0
-    marker.pose.orientation.w = 1.0
-
-    # Sphere size
-    marker.scale.x = 0.1
-    marker.scale.y = 0.1
-    marker.scale.z = 0.1
-
-    # Color (red)
-    marker.color.a = 1.0  # alpha
-    marker.color.r = 1.0
-    marker.color.g = 0.0
-    marker.color.b = 0.0
-
-    waypoint_viz_pub.publish(marker)
 
 
 
@@ -420,93 +183,12 @@ def viz_chosen_wp(chosen_waypoint, waypoint_viz_pub):
 # I need to understand how the diffusion model will react to this gradient
 
 
-# TODO FIGURE IT OUT
-# For now correcting only one traj for debugging
-def _get_gradient_traversability(trajs, fully_traversable_value=1.0):
-
-    if trav_img is None:
-        return 
-    
-    # traversability image, 0..1 values
-    traversability_img = torch.tensor(trav_img, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-
-    # F.grid_sample -> grid specifies the sampling pixel locations normalized by the input spatial dimensions. 
-    # Therefore, it should have most values in the range of [-1, 1]
-    # see https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.grid_sample.html
-    traj_normalized = torch.tensor(trajs.copy(), dtype=torch.float32, requires_grad=True)  # [N,2]
-    rospy.logdebug(f"Trajectory before traversability correction: {traj_normalized}")
-    
-    # grid for sampling: [1,N,1,2]
-    grid = traj_normalized.unsqueeze(0).unsqueeze(2)
-
-    traversability_vals = F.grid_sample(traversability_img, grid, align_corners=True)
-    traversability_vals = traversability_vals.squeeze()  
-    rospy.logdebug(f"Traversability values along the trajectory: {traversability_vals}")
-
-    cost = torch.sum(fully_traversable_value - traversability_vals)
-    cost.backward()
-    rospy.logdebug(f"Trajectory gradient after traversability correction: {traj_normalized.grad}")
-    rospy.logdebug(f"Cost value: {cost.item()}")
-
-    return traj_normalized.grad
-
-        # with torch.no_grad():
-        #     traj_normalized -= lr * traj.grad
-        #     traj_normalized.grad.zero_()
-
 
 
 # Callbacks
 
 
-# 0 is untraversable and 1 is fully traversable. https://arxiv.org/pdf/2404.07110
-def _callback_traversability_image(trav_img_msg: Image):
-    # trav_img = torch.from_numpy(ros_numpy.numpify(trav_img_msg))
-    # # TODO CHECK 2 Traversability images values need to remains unchanged here
-    # is_in_range = torch.all((trav_img >= 0) & (trav_img <= 1))
-    # rospy.logdebug(f"Traversability image values in range [0, 1] ( 0 is untraversable and 1 is fully traversable.): {is_in_range}")
-    # rospy.logdebug(f"Received traversability image of shape: {trav_img.shape}")
-    # rospy.logdebug(f"traversability image data type: {trav_img.dtype}\n")
 
-
-    #TODO NO MORE GLOABL HAVE TO FIND A WAY
-    global trav_img
-    trav_img = ros_numpy.numpify(trav_img_msg)
-    is_in_range = np.all((trav_img >= 0) & (trav_img <= 1))
-    rospy.logdebug(
-        f"Traversability image values in range [0, 1] (0 = untraversable, 1 = fully traversable): {is_in_range}"
-    )
-    rospy.logdebug(f"Received traversability image of shape: {trav_img.shape}")
-    rospy.logdebug(f"Traversability image data type: {trav_img.dtype}\n")
-
-
-# TODO TRY TO NOT HAVE THE GLOBAL
-overlay_traj_img = None
-def _callback_traversability_overlay_image(trav_img_msg: Image):
-    global overlay_traj_img
-    overlay_traj_img = ros_numpy.numpify(trav_img_msg)
-    rospy.logdebug(f"Received traversability overlay image of shape: {overlay_traj_img.shape}")
-
-def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publisher, trajs: List[np.ndarray], viz_img_size: Tuple[int, int], resize_factor:bool=False ):
-    if img.dtype != np.uint8:
-        img = (img * 255).astype(np.uint8)
-
-    # Convert RGB → BGR for OpenCV
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    img = plot_trajs_and_points_on_image(
-        img=img,
-        camera_matrix=camera_matrix_orig,
-        dist_coeffs=dist_coeffs,
-        list_trajs=trajs,
-        viz_img_size=viz_img_size,
-        resize_factor=resize_factor
-    )
-
-    ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
-    ros_img.header.stamp = rospy.Time.now()
-    ros_img.header.frame_id = "base_footprint"
-    pub.publish(ros_img)
 
 
 
@@ -514,10 +196,8 @@ def _publish_overlay_image(camera_matrix_orig, img: np.ndarray, pub: rospy.Publi
 
 def main(args: argparse.Namespace):
     rospy.init_node("traversability_diffusor", anonymous=True, log_level=args.log_level)
+    trav_img_subscriber = traversabilityImageSubscriber()
 
-    # /wild_visual_navigation_visu_traversability_front/traversability_overlayed 
-    rospy.Subscriber("/wild_visual_navigation_node/front/traversability", Image, _callback_traversability_image, queue_size=10) 
-    rospy.Subscriber("/wild_visual_navigation_visu_traversability_front/traversability_overlayed", Image, _callback_traversability_overlay_image, queue_size=10)
 
     # PUBLISHERS
     waypoint_pub = rospy.Publisher(WAYPOINT_TOPIC, Float32MultiArray, queue_size=1) 
@@ -526,9 +206,9 @@ def main(args: argparse.Namespace):
     all_path_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)
     # OVERLAY IMAGE
     # TODO BETTER NAMING TO UNDERSTAND
-    cam_wp_pub = rospy.Publisher("/topoplan/wps_overlay_img", Image, queue_size=10) # not corrected action
+    cam_wp_pub = rospy.Publisher("/wps_overlay_img", Image, queue_size=10) # not corrected action
     # cam_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_img", Image, queue_size=10)
-    trav_wp_pub = rospy.Publisher("/topoplan/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
+    trav_wp_pub = rospy.Publisher("/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
     # trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
 
     rate = rospy.Rate(RATE)
@@ -618,7 +298,8 @@ def main(args: argparse.Namespace):
             naction_selected = naction[0] # we could choose based on trav instead 
 
             if args.trav_baseline:
-                best_traj, best_score = _select_traj_best_traversability(
+                best_traj, best_score = select_traj_best_traversability(
+                    trav_img=trav_img_subscriber.get_trav_img(),
                     camera_matrix=camera_matrix_orig,
                     dist_coeffs=dist_coeffs,
                     list_trajs=naction,
@@ -644,23 +325,15 @@ def main(args: argparse.Namespace):
 
             img = context_queue[-1]
             img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
-            _publish_overlay_image(camera_matrix_orig, img, cam_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+            publish_overlay_image(camera_matrix_orig, dist_coeffs, img, cam_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
 
-            # _publish_overlay_image(img, cam_corr_wp_pub, naction_corr)
+            overlay_traj_img = trav_img_subscriber.get_overlay_traj_img()
             if overlay_traj_img is not None:
-                # _publish_overlay_image(overlay_traj_img, trav_corr_wp_pub, naction_corr) # SHOULD BE THE CORRECTED ACTION SO WE CAN COMPARE EASILY
                 rospy.logdebug(f"Publishing traversability overlay image with trajectories using overlay_traj of shape {overlay_traj_img.shape}")
-                _publish_overlay_image(camera_matrix_orig, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
+                publish_overlay_image(camera_matrix_orig, dist_coeffs, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
 
-            ma = MarkerArray()
-            for idx, paths in enumerate(naction):
-                r = 0.0
-                g = 0.0
-                b = 1.0
-                marker = make_path_marker(
-                    paths, idx, r, g, b, frame_id="base_link")
-                ma.markers.append(marker)
-            all_path_pub.publish(ma) 
+
+            make_marker_array(naction, all_path_pub)
 
             reached_goal = closest_node == goal_node
             goal_pub.publish(reached_goal)
