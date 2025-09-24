@@ -22,7 +22,7 @@ import time
 # UTILS
 from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_numpy_array
 from viz_utils import publish_overlay_image, viz_chosen_wp, make_marker_array
-from trav_utils import traversabilityImageSubscriber, sample_with_traversability_guidance #compute_traversability_guidance_finite_diff
+from trav_utils import * # TODO ONCE DONE IMPORT ONLY WHAT IS NEEDED
 
 # UTILS
 from topic_names import (IMAGE_TOPIC,
@@ -92,7 +92,6 @@ def _load_model(model_name: str, device: torch.device, train: bool = False)-> Tu
     return model, model_params
 
 
-
 def main(args: argparse.Namespace):
     global context_size
 
@@ -125,8 +124,6 @@ def main(args: argparse.Namespace):
     trav_wp_pub = rospy.Publisher("/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
     # trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
 
-    alpha = 0.05 # step size for traversability correction
-
     rospy.loginfo("Waiting for image observations...")
     rospy.wait_for_message(IMAGE_TOPIC, Image, timeout=None)
 
@@ -145,6 +142,16 @@ def main(args: argparse.Namespace):
             obs_images = obs_images.to(args.device)
             fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(args.device)
             mask = torch.ones(1).long().to(args.device) # ignore the goal
+
+
+            ###########################################
+
+            # DEBUGGING TRAVERSABILITY GRADIENT
+            # Add this before your main sampling loop to verify it's working:
+            debug_traversability_effect(trav_img_subscriber, args.device)
+
+
+            ###########################################
 
             # infer action
             with torch.no_grad():
@@ -165,110 +172,97 @@ def main(args: argparse.Namespace):
                 # init scheduler
                 noise_scheduler.set_timesteps(num_diffusion_iters)
 
-                start_time = time.time()
-                # for k in noise_scheduler.timesteps[:]:
-                #     # predict noise
-                #     noise_pred = model(
-                #         'noise_pred_net',
-                #         sample=naction,
-                #         timestep=k,
-                #         global_cond=obs_cond
+            start_time = time.time()
+            # for k in noise_scheduler.timesteps[:]:
+            for i, k in enumerate(noise_scheduler.timesteps):
+                # --------------------------------------------------------
+                # 1. Diffusion prediction step (no gradient needed here)
+                # --------------------------------------------------------
+                with torch.no_grad():
+                    noise_pred = model(
+                        'noise_pred_net',
+                        sample=naction,
+                        timestep=k,
+                        global_cond=obs_cond
+                    )
+
+                    naction = noise_scheduler.step(
+                        model_output=noise_pred,
+                        timestep=k,
+                        sample=naction
+                    ).prev_sample
+
+                # # --------------------------------------------------------
+                # # 2. Guidance step (re-enable gradient!)
+                # # --------------------------------------------------------
+                # if args.enable_trav:
+
+                #     torch_trav_map = torch.from_numpy(trav_img_subscriber.get_trav_img()).to(args.device)
+                #     # Compute traversability-guided cost and gradients
+                #     trav_loss, traj_grad = get_traversability_grad_cost(
+                #         naction,    # differentiable traj input
+                #         torch_trav_map       # your 224x224 traversability map tensor
                 #     )
 
-                #     # Apply traversability guidance using finite differences
-                #     guidance_scale = 0.5
-                #     finite_diff_epsilon = 0.01  # Adjust this if needed
+                #     # Scale & apply correction
+                #     grad_scale = 1.0
+                #     naction = naction + grad_scale * traj_grad
+
+                #     print(f"trav_loss: {trav_loss}")
+                #     rospy.loginfo(f"time elapsed: {time.time() - start_time}")
+
+
+# In your main sampling loop, replace the guidance section with:
+
+
+                # DEBUG WORKED 
+                # if args.enable_trav:
+                #     print("Applying traversability guidance...")
                     
-                #     if guidance_scale > 0:
-                #         try:
-                #             # Compute guidance
-                #             trav_loss, traj_grad = compute_traversability_guidance_finite_diff(
-                #                 naction, 
-                #                 trav_img_subscriber.get_trav_img(), 
-                #                 camera_matrix_orig, 
-                #                 dist_coeffs, 
-                #                 VIZ_IMAGE_SIZE_FISHEYE,
-                #                 epsilon=finite_diff_epsilon
-                #             )
-                            
-                #             # Apply time-dependent guidance
-                #             guidance_weight = guidance_scale * (1 - k / len(noise_scheduler.timesteps))
-                            
-                #             # Apply guidance (ADD because gradient points toward better traversability)
-                #             noise_pred = noise_pred + guidance_weight * traj_grad
-                            
-                #             print(f"Applied guidance: loss={trav_loss.item():.4f}, "
-                #                 f"grad_norm={traj_grad.norm().item():.6f}, weight={guidance_weight:.3f}")
-                            
-                #         except Exception as e:
-                #             print(f"Guidance failed: {e}")
-                #             # Continue without guidance
-
-                #     # inverse diffusion step (remove noise)
-                #     naction = noise_scheduler.step(
-                #         model_output=noise_pred,
-                #         timestep=k,
-                #         sample=naction
-                #     ).prev_sample
-
-                naction = sample_with_traversability_guidance(
-                    model,
-                    noisy_action,
-                    noise_scheduler,
-                    obs_cond,
-                    trav_img_subscriber.get_trav_img(),
-                    camera_matrix_orig,
-                    dist_coeffs,
-                    VIZ_IMAGE_SIZE_FISHEYE,
-                )
-
-                # for k in noise_scheduler.timesteps[:]:
-                #     naction.requires_grad_(True)
-
-                #     # predict noise
-                #     noise_pred = model(
-                #         'noise_pred_net',
-                #         sample=naction,
-                #         timestep=k,
-                #         global_cond=obs_cond
-                #     )
-
-                #     guidance_scale = 0.5
-                #     # print(naction)
-                #     trav_loss = compute_traversability_guidance(
-                #         naction, trav_img_subscriber.get_trav_img(), camera_matrix_orig, dist_coeffs, VIZ_IMAGE_SIZE_FISHEYE
-                #     )
-                #     # print("check naction grad", naction.grad)
-                #     # Compute gradients
-                #     traj_grad = torch.autograd.grad(trav_loss, naction, retain_graph=False)[0]
+                #     # Get traversability map
+                #     trav_map = trav_img_subscriber.get_trav_img()
                     
-                #     # Apply guidance (subtract gradient to move toward higher traversability)
-                #     guidance_weight = guidance_scale * (1 - k / len(noise_scheduler.timesteps))
-                #     noise_pred = noise_pred - guidance_weight * traj_grad
+                #     # Debug and apply guidance
+                #     trav_loss, traj_grad = debug_and_apply_guidance(
+                #         naction, trav_map, camera_matrix_orig, dist_coeffs, VIZ_IMAGE_SIZE_FISHEYE
+                #     )
+
+                #     if traj_grad.norm().item() > 1e-6:  # Only apply if gradients are meaningful
+                #         timestep_ratio = i / len(noise_scheduler.timesteps)
+                #         grad_scale = 1.0 * (1 - timestep_ratio)
+                        
+                #         print(f"Applying guidance with scale: {grad_scale:.3f}")
+                #         naction = naction + grad_scale * traj_grad
+                #     else:
+                #         print("⚠️ Skipping guidance - gradients too small")
 
 
-                #     # inverse diffusion step (remove noise)
-                #     naction = noise_scheduler.step(
-                #         model_output=noise_pred,
-                #         timestep=k,
-                #         sample=naction
-                #     ).prev_sample.detach()
+                # if args.enable_trav:
+                #     trav_map = trav_img_subscriber.get_trav_img()
+                    
+                #     # Use enhanced guidance
+                #     naction = apply_enhanced_guidance(
+                #         naction, trav_map, camera_matrix_orig, dist_coeffs, 
+                #         VIZ_IMAGE_SIZE_FISHEYE, k  # step index
+                #     )
 
-                    # grad_scores = compute_traversability_scores(
-                    #     trajs=to_numpy(naction),
-                    #     trav_img=trav_img_subscriber.get_trav_img(),
-                    #     camera_matrix=camera_matrix_orig,
-                    #     dist_coeffs=dist_coeffs,
-                    #     viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
-                    #     device=args.device,
-                    #     resize_factor=True
-                    # )
-                    # grad_scores = get_gradient_traversability(trajs=to_numpy(naction), trav_img=trav_img_subscriber.get_trav_img())
 
-                    # naction += alpha * grad_scores 
-                    # grad_scores.zero_()
 
-                rospy.loginfo(f"time elapsed: {time.time() - start_time}")
+                if args.enable_trav:
+                    trav_map = trav_img_subscriber.get_trav_img()
+                    
+                    # Store original for comparison
+                    naction_before = naction.clone()
+                    
+                    # Apply SMOOTH guidance
+                    naction = apply_smooth_traversability_guidance(
+                        naction, trav_map, camera_matrix_orig, dist_coeffs, 
+                        VIZ_IMAGE_SIZE_FISHEYE, i, len(noise_scheduler.timesteps)
+                    )
+
+
+                    if i % 10 == 0:
+                        visualize_guidance_effect(naction_before, naction, trav_map, i)
 
             naction = to_numpy(get_action(naction))
 
@@ -336,6 +330,14 @@ if __name__ == "__main__":
     parser.add_argument(
             "--debug", action="store_true", help="Enable debug mode with verbose logging"
         )
+
+    parser.add_argument(
+        "--enable_trav", 
+        "-e",
+        default=True,
+        type=bool,
+        help="Enable traversability guidance during diffusion (default: True)",
+    )
 
     args = parser.parse_args()
     args.log_level = rospy.DEBUG if args.debug else rospy.INFO
