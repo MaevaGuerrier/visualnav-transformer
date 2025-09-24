@@ -1,35 +1,28 @@
 
-import matplotlib.pyplot as plt
 import os
-from typing import Tuple, Sequence, Dict, Union, Optional, Callable
+from typing import Tuple, Dict, Any
 import numpy as np
 import torch
-import torch.nn as nn
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-
-import matplotlib.pyplot as plt
 import yaml
 
 # ROS
 import rospy
-from geometry_msgs.msg import PoseStamped, Pose, Point
-from nav_msgs.msg import Path
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool, Float32MultiArray
+from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 
 from vint_train.training.train_utils import get_action
 import torch
-from PIL import Image as PILImage
 import numpy as np
 import argparse
 import yaml
 import time
 
 # UTILS
-from utils import msg_to_pil, to_numpy, transform_images, load_model
-from viz_utils import viz_chosen_wp, make_marker_array
-
+from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_numpy_array
+from viz_utils import publish_overlay_image, viz_chosen_wp, make_marker_array
+from trav_utils import traversabilityImageSubscriber, sample_with_traversability_guidance #compute_traversability_guidance_finite_diff
 
 # UTILS
 from topic_names import (IMAGE_TOPIC,
@@ -65,9 +58,6 @@ dist_coeffs = np.array([
         0.00581938967971292
 ], dtype=np.float64)
 
-# Load the model 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-rospy.loginfo(f"Using device: {device}")
 
 def callback_obs(msg):
     obs_img = msg_to_pil(msg)
@@ -125,8 +115,8 @@ def main(args: argparse.Namespace):
     waypoint_pub = rospy.Publisher(WAYPOINT_TOPIC, Float32MultiArray, queue_size=1)  
     
     # RVIZ diffusion paths and choosen waypoint
-    chosen_wp_viz_pub = rospy.Publisher('visualization_marker', Marker, queue_size=10)
-    all_path_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)
+    chosen_wp_viz_pub = rospy.Publisher('/visualization_marker', Marker, queue_size=10)
+    all_path_pub = rospy.Publisher("/visualization_marker_array", MarkerArray, queue_size=10)
     
 
     # Images overlay
@@ -135,10 +125,14 @@ def main(args: argparse.Namespace):
     trav_wp_pub = rospy.Publisher("/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
     # trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
 
+    alpha = 0.05 # step size for traversability correction
 
+    rospy.loginfo("Waiting for image observations...")
+    rospy.wait_for_message(IMAGE_TOPIC, Image, timeout=None)
 
-
-    rospy.loginfo("Registered with master node. Waiting for image observations...")
+    rospy.loginfo("Waiting for traversability observations...")
+    rospy.wait_for_message("/wild_visual_navigation_node/front/traversability", Image, timeout=None)
+    trav_img_subscriber = traversabilityImageSubscriber()
 
     while not rospy.is_shutdown():
         # EXPLORATION MODE
@@ -148,9 +142,9 @@ def main(args: argparse.Namespace):
             ):
 
             obs_images = transform_images(context_queue, model_params["image_size"], center_crop=True)
-            obs_images = obs_images.to(device)
-            fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(device)
-            mask = torch.ones(1).long().to(device) # ignore the goal
+            obs_images = obs_images.to(args.device)
+            fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(args.device)
+            mask = torch.ones(1).long().to(args.device) # ignore the goal
 
             # infer action
             with torch.no_grad():
@@ -165,28 +159,115 @@ def main(args: argparse.Namespace):
                 
                 # initialize action from Gaussian noise
                 noisy_action = torch.randn(
-                    (args.num_samples, model_params["len_traj_pred"], 2), device=device)
+                    (args.num_samples, model_params["len_traj_pred"], 2), device=args.device)
                 naction = noisy_action
 
                 # init scheduler
                 noise_scheduler.set_timesteps(num_diffusion_iters)
 
                 start_time = time.time()
-                for k in noise_scheduler.timesteps[:]:
-                    # predict noise
-                    noise_pred = model(
-                        'noise_pred_net',
-                        sample=naction,
-                        timestep=k,
-                        global_cond=obs_cond
-                    )
+                # for k in noise_scheduler.timesteps[:]:
+                #     # predict noise
+                #     noise_pred = model(
+                #         'noise_pred_net',
+                #         sample=naction,
+                #         timestep=k,
+                #         global_cond=obs_cond
+                #     )
 
-                    # inverse diffusion step (remove noise)
-                    naction = noise_scheduler.step(
-                        model_output=noise_pred,
-                        timestep=k,
-                        sample=naction
-                    ).prev_sample
+                #     # Apply traversability guidance using finite differences
+                #     guidance_scale = 0.5
+                #     finite_diff_epsilon = 0.01  # Adjust this if needed
+                    
+                #     if guidance_scale > 0:
+                #         try:
+                #             # Compute guidance
+                #             trav_loss, traj_grad = compute_traversability_guidance_finite_diff(
+                #                 naction, 
+                #                 trav_img_subscriber.get_trav_img(), 
+                #                 camera_matrix_orig, 
+                #                 dist_coeffs, 
+                #                 VIZ_IMAGE_SIZE_FISHEYE,
+                #                 epsilon=finite_diff_epsilon
+                #             )
+                            
+                #             # Apply time-dependent guidance
+                #             guidance_weight = guidance_scale * (1 - k / len(noise_scheduler.timesteps))
+                            
+                #             # Apply guidance (ADD because gradient points toward better traversability)
+                #             noise_pred = noise_pred + guidance_weight * traj_grad
+                            
+                #             print(f"Applied guidance: loss={trav_loss.item():.4f}, "
+                #                 f"grad_norm={traj_grad.norm().item():.6f}, weight={guidance_weight:.3f}")
+                            
+                #         except Exception as e:
+                #             print(f"Guidance failed: {e}")
+                #             # Continue without guidance
+
+                #     # inverse diffusion step (remove noise)
+                #     naction = noise_scheduler.step(
+                #         model_output=noise_pred,
+                #         timestep=k,
+                #         sample=naction
+                #     ).prev_sample
+
+                naction = sample_with_traversability_guidance(
+                    model,
+                    noisy_action,
+                    noise_scheduler,
+                    obs_cond,
+                    trav_img_subscriber.get_trav_img(),
+                    camera_matrix_orig,
+                    dist_coeffs,
+                    VIZ_IMAGE_SIZE_FISHEYE,
+                )
+
+                # for k in noise_scheduler.timesteps[:]:
+                #     naction.requires_grad_(True)
+
+                #     # predict noise
+                #     noise_pred = model(
+                #         'noise_pred_net',
+                #         sample=naction,
+                #         timestep=k,
+                #         global_cond=obs_cond
+                #     )
+
+                #     guidance_scale = 0.5
+                #     # print(naction)
+                #     trav_loss = compute_traversability_guidance(
+                #         naction, trav_img_subscriber.get_trav_img(), camera_matrix_orig, dist_coeffs, VIZ_IMAGE_SIZE_FISHEYE
+                #     )
+                #     # print("check naction grad", naction.grad)
+                #     # Compute gradients
+                #     traj_grad = torch.autograd.grad(trav_loss, naction, retain_graph=False)[0]
+                    
+                #     # Apply guidance (subtract gradient to move toward higher traversability)
+                #     guidance_weight = guidance_scale * (1 - k / len(noise_scheduler.timesteps))
+                #     noise_pred = noise_pred - guidance_weight * traj_grad
+
+
+                #     # inverse diffusion step (remove noise)
+                #     naction = noise_scheduler.step(
+                #         model_output=noise_pred,
+                #         timestep=k,
+                #         sample=naction
+                #     ).prev_sample.detach()
+
+                    # grad_scores = compute_traversability_scores(
+                    #     trajs=to_numpy(naction),
+                    #     trav_img=trav_img_subscriber.get_trav_img(),
+                    #     camera_matrix=camera_matrix_orig,
+                    #     dist_coeffs=dist_coeffs,
+                    #     viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                    #     device=args.device,
+                    #     resize_factor=True
+                    # )
+                    # grad_scores = get_gradient_traversability(trajs=to_numpy(naction), trav_img=trav_img_subscriber.get_trav_img())
+
+                    # naction += alpha * grad_scores 
+                    # grad_scores.zero_()
+
                 rospy.loginfo(f"time elapsed: {time.time() - start_time}")
 
             naction = to_numpy(get_action(naction))
@@ -194,6 +275,7 @@ def main(args: argparse.Namespace):
 
             rospy.logdebug(f"naction {naction}")
 
+            # TODO either we choose based on best traj or we let it be 
             naction_selected = naction[0] # change this based on heuristic 
 
             rospy.logdebug(f"naction[0] {naction[0]}")
@@ -201,6 +283,16 @@ def main(args: argparse.Namespace):
             chosen_waypoint = naction_selected[args.waypoint]
             rospy.loginfo(f"chosen waypoint {chosen_waypoint}")
             viz_chosen_wp(chosen_waypoint, chosen_wp_viz_pub)
+
+
+            img = context_queue[-1]
+            img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
+            publish_overlay_image(camera_matrix_orig, dist_coeffs, img, cam_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+
+            overlay_traj_img = trav_img_subscriber.get_overlay_traj_img()
+            if overlay_traj_img is not None:
+                publish_overlay_image(camera_matrix_orig, dist_coeffs, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
+
 
             if model_params["normalize"]:
                 chosen_waypoint *= (MAX_V / RATE)
@@ -239,8 +331,23 @@ if __name__ == "__main__":
         type=int,
         help=f"Number of actions sampled from the exploration model (default: 8)",
     )
+   
+    
+    parser.add_argument(
+            "--debug", action="store_true", help="Enable debug mode with verbose logging"
+        )
+
     args = parser.parse_args()
-    print(f"Using {device}")
+    args.log_level = rospy.DEBUG if args.debug else rospy.INFO
+
+    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    rospy.loginfo(
+        f"Log level set to: {args.log_level}\n"
+        f"Using device: {args.device}\n"
+        f"_____________________________________________\n"
+        f"Listening to image topic {IMAGE_TOPIC} \n Publishing to topic {robot_config['vel_navi_topic']} with observation rate at {robot_config['frame_rate']} Hz"
+    )
+
     main(args)
 
 

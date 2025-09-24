@@ -2,7 +2,7 @@ import rospy
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 import numpy as np
-from typing import Tuple
+from typing import Tuple, List
 import cv2
 from cv_bridge import CvBridge
 
