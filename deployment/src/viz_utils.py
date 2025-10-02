@@ -37,16 +37,20 @@ def project_points(
     # Convert from (x, y, z) to (y, -z, x) for cv2
     xyz_cv = np.stack([xyz[..., 1], -xyz[..., 2], xyz[..., 0]], axis=-1)
     
-    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
-    xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
+    if dist_coeffs is None:
 
+        uv, _ = cv2.projectPoints(
+            xyz_cv.reshape(batch_size * horizon, 3), rvec, tvec, camera_matrix, dist_coeffs
+        )
 
-    # uv, _ = cv2.projectPoints(
-    #     xyz_cv.reshape(batch_size * horizon, 3), rvec, tvec, camera_matrix, dist_coeffs
-    # )
-    uv, _ = cv2.fisheye.projectPoints(
-        xyz_cv, rvec, tvec, camera_matrix, dist_coeffs
-    )
+    else:
+
+        # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
+        xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
+
+        uv, _ = cv2.fisheye.projectPoints(
+            xyz_cv, rvec, tvec, camera_matrix, dist_coeffs
+        )
     
     uv = uv.reshape(batch_size, horizon, 2)
     

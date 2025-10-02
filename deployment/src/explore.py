@@ -23,6 +23,7 @@ import time
 from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_numpy_array
 from viz_utils import publish_overlay_image, viz_chosen_wp, make_marker_array
 from trav_utils import * # TODO ONCE DONE IMPORT ONLY WHAT IS NEEDED
+from repulsive_test import RepulsiveFieldPlanner
 
 # UTILS
 from topic_names import (IMAGE_TOPIC,
@@ -45,18 +46,34 @@ VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
 # GLOBALS
 context_queue = []
 context_size = None  
-camera_matrix_orig = np.array([
-    [262.459286,   1.916160, 327.699961],
-    [  0.000000, 263.419908, 224.459372],
-    [  0.000000,   0.000000,   1.000000]
-], dtype=np.float64)
+# camera_matrix_orig = np.array([
+#     [262.459286,   1.916160, 327.699961],
+#     [  0.000000, 263.419908, 224.459372],
+#     [  0.000000,   0.000000,   1.000000]
+# ], dtype=np.float64)
 
-dist_coeffs = np.array([
-    -0.03727222045233312, 
-        0.007588870705292973,
-    -0.01666117486022043, 
-        0.00581938967971292
-], dtype=np.float64)
+# dist_coeffs = np.array([
+#     -0.03727222045233312, 
+#         0.007588870705292973,
+#     -0.01666117486022043, 
+#         0.00581938967971292
+# ], dtype=np.float64)
+
+# camera_extrinsics = np.array([[0, 0, 1, 0.000],
+#                             [-1, 0, 0, 0.000],
+#                             [0, -1, 0, 0.025],
+#                             [0, 0, 0, 1]])
+
+
+
+# LIMO ROS AGILEX SIMULATION
+camera_matrix_orig = np.array([
+                [381.36246688113556,   0.0, 320.5],
+                [  0.0,               381.36246688113556, 240.5],
+                [  0.0,                 0.0,   1.0]
+            ])
+dist_coeffs = None
+
 
 
 def callback_obs(msg):
@@ -120,9 +137,9 @@ def main(args: argparse.Namespace):
 
     # Images overlay
     cam_wp_pub = rospy.Publisher("/wps_overlay_img", Image, queue_size=10) # not corrected action
-    # cam_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_img", Image, queue_size=10)
-    trav_wp_pub = rospy.Publisher("/wps_overlay_trav_img", Image, queue_size=10) # not corrected action
-    # trav_corr_wp_pub = rospy.Publisher("/topoplan/wps_corrected_overlay_trav_img", Image, queue_size=10)
+    cam_corr_wp_pub = rospy.Publisher("wps_corrected_overlay_img", Image, queue_size=10)
+    trav_wp_pub = rospy.Publisher("wps_overlay_trav_img", Image, queue_size=10) # not corrected action
+    trav_corr_wp_pub = rospy.Publisher("wps_corrected_overlay_trav_img", Image, queue_size=10)
 
     rospy.loginfo("Waiting for image observations...")
     rospy.wait_for_message(IMAGE_TOPIC, Image, timeout=None)
@@ -130,6 +147,7 @@ def main(args: argparse.Namespace):
     rospy.loginfo("Waiting for traversability observations...")
     rospy.wait_for_message("/wild_visual_navigation_node/front/traversability", Image, timeout=None)
     trav_img_subscriber = traversabilityImageSubscriber()
+    
 
     while not rospy.is_shutdown():
         # EXPLORATION MODE
@@ -143,17 +161,6 @@ def main(args: argparse.Namespace):
             fake_goal = torch.randn((1, 3, *model_params["image_size"])).to(args.device)
             mask = torch.ones(1).long().to(args.device) # ignore the goal
 
-
-            ###########################################
-
-            # DEBUGGING TRAVERSABILITY GRADIENT
-            # Add this before your main sampling loop to verify it's working:
-            debug_traversability_effect(trav_img_subscriber, args.device)
-
-
-            ###########################################
-
-            # infer action
             with torch.no_grad():
                 # encoder vision features
                 obs_cond = model('vision_encoder', obs_img=obs_images, goal_img=fake_goal, input_goal_mask=mask)
@@ -173,11 +180,7 @@ def main(args: argparse.Namespace):
                 noise_scheduler.set_timesteps(num_diffusion_iters)
 
             start_time = time.time()
-            # for k in noise_scheduler.timesteps[:]:
-            for i, k in enumerate(noise_scheduler.timesteps):
-                # --------------------------------------------------------
-                # 1. Diffusion prediction step (no gradient needed here)
-                # --------------------------------------------------------
+            for k in noise_scheduler.timesteps[:]:
                 with torch.no_grad():
                     noise_pred = model(
                         'noise_pred_net',
@@ -192,100 +195,79 @@ def main(args: argparse.Namespace):
                         sample=naction
                     ).prev_sample
 
-                # # --------------------------------------------------------
-                # # 2. Guidance step (re-enable gradient!)
-                # # --------------------------------------------------------
-                # if args.enable_trav:
+            print("time elapsed:", time.time() - start_time)
 
-                #     torch_trav_map = torch.from_numpy(trav_img_subscriber.get_trav_img()).to(args.device)
-                #     # Compute traversability-guided cost and gradients
-                #     trav_loss, traj_grad = get_traversability_grad_cost(
-                #         naction,    # differentiable traj input
-                #         torch_trav_map       # your 224x224 traversability map tensor
-                #     )
-
-                #     # Scale & apply correction
-                #     grad_scale = 1.0
-                #     naction = naction + grad_scale * traj_grad
-
-                #     print(f"trav_loss: {trav_loss}")
-                #     rospy.loginfo(f"time elapsed: {time.time() - start_time}")
-
-
-# In your main sampling loop, replace the guidance section with:
-
-
-                # DEBUG WORKED 
-                # if args.enable_trav:
-                #     print("Applying traversability guidance...")
-                    
-                #     # Get traversability map
-                #     trav_map = trav_img_subscriber.get_trav_img()
-                    
-                #     # Debug and apply guidance
-                #     trav_loss, traj_grad = debug_and_apply_guidance(
-                #         naction, trav_map, camera_matrix_orig, dist_coeffs, VIZ_IMAGE_SIZE_FISHEYE
-                #     )
-
-                #     if traj_grad.norm().item() > 1e-6:  # Only apply if gradients are meaningful
-                #         timestep_ratio = i / len(noise_scheduler.timesteps)
-                #         grad_scale = 1.0 * (1 - timestep_ratio)
-                        
-                #         print(f"Applying guidance with scale: {grad_scale:.3f}")
-                #         naction = naction + grad_scale * traj_grad
-                #     else:
-                #         print("⚠️ Skipping guidance - gradients too small")
-
-
-                # if args.enable_trav:
-                #     trav_map = trav_img_subscriber.get_trav_img()
-                    
-                #     # Use enhanced guidance
-                #     naction = apply_enhanced_guidance(
-                #         naction, trav_map, camera_matrix_orig, dist_coeffs, 
-                #         VIZ_IMAGE_SIZE_FISHEYE, k  # step index
-                #     )
-
-
-
-                if args.enable_trav:
-                    trav_map = trav_img_subscriber.get_trav_img()
-                    
-                    # Store original for comparison
-                    naction_before = naction.clone()
-                    
-                    # Apply SMOOTH guidance
-                    naction = apply_smooth_traversability_guidance(
-                        naction, trav_map, camera_matrix_orig, dist_coeffs, 
-                        VIZ_IMAGE_SIZE_FISHEYE, i, len(noise_scheduler.timesteps)
-                    )
-
-
-                    if i % 10 == 0:
-                        visualize_guidance_effect(naction_before, naction, trav_map, i)
 
             naction = to_numpy(get_action(naction))
 
+            orig_naction = naction
+            
 
-            rospy.logdebug(f"naction {naction}")
+            trav_img = trav_img_subscriber.get_trav_img()
+
+            planner = RepulsiveFieldPlanner(
+                robot_radius_pixels=1, # in pixel space
+                max_linear_vel=MAX_V, # m/s
+                max_angular_vel=MAX_W, # rad/s
+                repulsion_gain=10.0,
+                safety_margin_pixels=5,
+                influence_radius_pixels=1
+            )
+
+
+            planner.create_distance_field(trav_img, threshold=0.5)
+            trajectories_pixel = get_traj_pixels_coords(
+                camera_matrix_orig, dist_coeffs, list(naction), VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True
+            )
+
+            trajectories_pixel = np.asarray(trajectories_pixel)
+            trajectories_pixel = np.asarray(trajectories_pixel).squeeze(axis=2)
+            # safe_trajs = trajectories_pixel
+            # print(f"pixel traj {safe_trajs.shape}")
+
+            safe_trajs = planner.modify_trajectory(trajectory_pixels=trajectories_pixel, traversability_map=trav_img, camera_matrix=camera_matrix_orig, dist_coeffs=dist_coeffs, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, dt=1.0/RATE)
+            safe_trajs = np.array(safe_trajs).squeeze()
+            # print(f"MODIFY TRAJ shape {safe_trajs.shape}")
+
+            naction = planner.get_world_coords_from_pixels(
+                pixel_coords=safe_trajs,
+                camera_matrix=camera_matrix_orig,
+                dist_coeffs=dist_coeffs,
+                viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                camera_height=0.25,
+                camera_x_offset=0.10,
+                resize_factor=True
+            )
+
+            # print("Original action:", orig_naction)
+            # print("Corrected action:", naction)
+            # exit()
+
+
+            # TODO ADD ALL CAM INFO AS CONFIG FILE 
+            naction_selected = naction[0]
 
             # TODO either we choose based on best traj or we let it be 
-            naction_selected = naction[0] # change this based on heuristic 
+            # naction_selected = naction[0] # change this based on heuristic 
 
-            rospy.logdebug(f"naction[0] {naction[0]}")
 
             chosen_waypoint = naction_selected[args.waypoint]
             rospy.loginfo(f"chosen waypoint {chosen_waypoint}")
+            rospy.loginfo(f"chosen waypoint if orig action {orig_naction[0][args.waypoint]}")
             viz_chosen_wp(chosen_waypoint, chosen_wp_viz_pub)
 
 
             img = context_queue[-1]
             img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
-            publish_overlay_image(camera_matrix_orig, dist_coeffs, img, cam_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+            publish_overlay_image(camera_matrix_orig, dist_coeffs, img, cam_wp_pub, orig_naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+            publish_overlay_image(camera_matrix_orig, dist_coeffs, img, cam_corr_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE)
+
+
 
             overlay_traj_img = trav_img_subscriber.get_overlay_traj_img()
             if overlay_traj_img is not None:
-                publish_overlay_image(camera_matrix_orig, dist_coeffs, overlay_traj_img, trav_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
+                publish_overlay_image(camera_matrix_orig, dist_coeffs, overlay_traj_img, trav_wp_pub, orig_naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
+                publish_overlay_image(camera_matrix_orig, dist_coeffs, overlay_traj_img, trav_corr_wp_pub, naction, viz_img_size=VIZ_IMAGE_SIZE_FISHEYE, resize_factor=True) # ORIG ACTION WITHOUT CORRECTION
 
 
             if model_params["normalize"]:
