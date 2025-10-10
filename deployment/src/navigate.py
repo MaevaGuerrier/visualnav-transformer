@@ -28,7 +28,8 @@ import time
 # UTILS
 from topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
-                        SAMPLED_ACTIONS_TOPIC)
+                        SAMPLED_ACTIONS_TOPIC,
+                        PREDICTED_NODE_TOPIC)
 
 
 # CONSTANTS
@@ -41,6 +42,7 @@ with open(ROBOT_CONFIG_PATH, "r") as f:
 MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
+VEL_TOPIC = robot_config["vel_navi_topic"]
 
 # GLOBALS
 context_queue = []
@@ -126,8 +128,8 @@ def main(args: argparse.Namespace):
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
     subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
     closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
+    predicted_node_pub = rospy.Publisher(PREDICTED_NODE_TOPIC, Float32MultiArray, queue_size=1)
 
-    # print("Registered with master node. Waiting for image observations...")
 
     if model_params["model_type"] == "nomad":
         num_diffusion_iters = model_params["num_diffusion_iters"]
@@ -271,7 +273,12 @@ def main(args: argparse.Namespace):
                     closest_node = min(start + min_dist_idx + 1, goal_node)
                 # print("chosen wp", chosen_waypoint)
                 print("min dist idx", min_dist_idx)
+
                 print("closest node", closest_node)
+                predicted_node_msg = Float32MultiArray()
+                predicted_node_msg.data = np.array([closest_node], dtype=np.float32)
+                predicted_node_pub.publish(predicted_node_msg)
+
                 print(f"end {end} start {start}")
                 # Publish visualization messages
                 # Waypoint

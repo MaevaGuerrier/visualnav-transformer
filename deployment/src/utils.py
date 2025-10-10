@@ -1,9 +1,3 @@
-
-import os
-import sys
-import io
-import matplotlib.pyplot as plt
-
 # ROS
 from sensor_msgs.msg import Image
 
@@ -15,7 +9,7 @@ import torchvision.transforms.functional as TF
 
 import numpy as np
 from PIL import Image as PILImage
-from typing import List, Tuple, Dict, Optional
+from typing import List
 
 # models
 from vint_train.models.gnm.gnm import GNM
