@@ -13,7 +13,7 @@ import yaml
 import rospy
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
-from std_msgs.msg import Bool, Float32MultiArray
+from std_msgs.msg import Bool, Float32MultiArray, Int32
 from nav_msgs.msg import Path
 from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
 
@@ -29,7 +29,7 @@ import time
 from topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
                         SAMPLED_ACTIONS_TOPIC,
-                        PREDICTED_NODE_TOPIC)
+                        CLOSEST_NODE_TOPIC)
 
 
 # CONSTANTS
@@ -128,7 +128,7 @@ def main(args: argparse.Namespace):
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
     subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
     closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
-    predicted_node_pub = rospy.Publisher(PREDICTED_NODE_TOPIC, Float32MultiArray, queue_size=1)
+    closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=1)
 
 
     if model_params["model_type"] == "nomad":
@@ -275,9 +275,9 @@ def main(args: argparse.Namespace):
                 print("min dist idx", min_dist_idx)
 
                 print("closest node", closest_node)
-                predicted_node_msg = Float32MultiArray()
-                predicted_node_msg.data = np.array([closest_node], dtype=np.float32)
-                predicted_node_pub.publish(predicted_node_msg)
+                closest_node_msg = Int32()
+                closest_node_msg.data = closest_node
+                closest_node_pub.publish(closest_node_msg)
 
                 print(f"end {end} start {start}")
                 # Publish visualization messages

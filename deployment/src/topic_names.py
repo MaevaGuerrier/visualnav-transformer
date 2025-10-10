@@ -19,7 +19,7 @@ TELEOP_LAUNCH = "teleop_twist_keyboard.py"
 FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"
 REVERSE_IMAGE_TOPIC = "/usb_cam_reverse/image_raw"
 IMAGE_TOPIC = "/camera/image_raw" # oak lite pro /oak/rgb/image_raw # d400 "/d400_arm/color/image_raw" # fisheye "/usb_cam/image_raw"
-PREDICTED_NODE_TOPIC = "/predicted_node"
+CLOSEST_NODE_TOPIC = "/closest_node"
 
 
 # exploration topics
