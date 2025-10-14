@@ -128,7 +128,7 @@ def main(args: argparse.Namespace):
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
     subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
     closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
-    closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=1)
+    closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
 
 
     if model_params["model_type"] == "nomad":
@@ -162,6 +162,10 @@ def main(args: argparse.Namespace):
                 min_idx = np.argmin(dists)
                 closest_node = min_idx + start
                 print("closest node:", closest_node)
+                closest_node_msg = Int32()
+                closest_node_msg.data = closest_node
+                closest_node_pub.publish(closest_node_msg)
+                
                 sg_idx = min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)
                 obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
 
@@ -275,9 +279,6 @@ def main(args: argparse.Namespace):
                 print("min dist idx", min_dist_idx)
 
                 print("closest node", closest_node)
-                closest_node_msg = Int32()
-                closest_node_msg.data = closest_node
-                closest_node_pub.publish(closest_node_msg)
 
                 print(f"end {end} start {start}")
                 # Publish visualization messages
