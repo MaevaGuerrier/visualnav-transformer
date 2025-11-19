@@ -7,6 +7,6 @@ graph_rate: 0.3333 # Hz
 
 # topic names (modify for different robots/nodes)
 vel_teleop_topic: /cmd_vel_teleop
-vel_navi_topic: /cmd_vel
+vel_navi_topic: /cmd_vel_navigate # There is an issue nothing is being published when using tmux /cmd_vel_navigate tmux line is commemented out in launch file
 
 
