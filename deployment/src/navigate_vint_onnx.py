@@ -65,7 +65,7 @@ def callback_obs(msg):
 def main(args: argparse.Namespace):
     global context_size
 
-    trt_model = load_model_trt("vint")
+    trt_model = load_model_trt(args.model)
     print("loaded model")
     # load topomap
     topomap_filenames = sorted(
@@ -248,9 +248,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        default="nomad",
+        default="vint",
         type=str,
-        help="model name (only nomad is supported) (hint: check ../config/models.yaml) (default: nomad)",
+        help="model name (only vint is supported) (hint: check ../config/models.yaml) (default: vint)",
     )
     parser.add_argument(
         "--waypoint",
@@ -263,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="topomap",
+        default="sim_test",
         type=str,
         help="path to topomap images",
     )

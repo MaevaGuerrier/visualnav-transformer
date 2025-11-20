@@ -46,6 +46,9 @@ model.eval()
 print("loading model")
 
 
+# This can be done more easily than Nomad because forward returns both distance and action predictions
+# Whereas in Nomad its calling different sub-networks separately, with their own forward methods
+
 print("------------------------ Distance Pred Network --------------------------------")
 print("converting dist pred network to onnx")
 
