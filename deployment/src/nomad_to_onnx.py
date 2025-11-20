@@ -1,3 +1,4 @@
+import inspect
 import torch
 import yaml
 import os
@@ -111,30 +112,114 @@ print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
 print(f"\nVerifying outputs match...")
 test_cpu_obs_encoding_tokens_output = test_obs_encoding_tokens.cpu().numpy()
 max_diff_obs_encoding_tokens = abs(test_cpu_obs_encoding_tokens_output - ort_outputs[0]).max()
-print(f"Maximum difference between for distance PyTorch and ONNX: {max_diff_obs_encoding_tokens}")
+print(f"Maximum difference for distance between PyTorch and ONNX: {max_diff_obs_encoding_tokens}")
 
 print("---------------------- End of Vision Encoder ---------------------------------- \n")
 
 
 
+print("---------------------- Dist pred network -----------------------------")
+
+
+dist_pred_net = model.dist_pred_net
+dist_pred_net.eval()
+
+# obsgoal_cond = model('vision_encoder', ...
+# dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond) --> dist takes inputs of obsgoal_cond
+# test_obs_encoding_tokens.shape torch.Size([4, 256])
+dummy_obsgoal_cond = torch.randn(test_obs_encoding_tokens.shape[0], test_obs_encoding_tokens.shape[1], device=device)
+# VERY IMPORTANT the first input can be changed (see --radius in navigate.py)
+
+print("Testing forward pass for nomad dist pred network ...")
+with torch.no_grad():
+
+    test_dist_pred = dist_pred_net(dummy_obsgoal_cond)
+
+    print(
+        f"Success forward pass for nomad dist pred network with shapes for model {test_dist_pred}"
+    )
+
+onnx_dist_pred = "nomad_dist_pred_net.onnx"
+
+torch.onnx.export(
+    dist_pred_net,
+    dummy_obsgoal_cond,
+    onnx_dist_pred,
+    opset_version=17,
+    input_names=["obsgoal_cond"],
+    output_names=["distances_pred"],
+    dynamic_axes={"obsgoal_cond": {0: "batch"}, 
+                  "distances_pred": {0: "batch"}}
+)
+
+
+onnx_model = onnx.load(onnx_dist_pred)
+onnx.checker.check_model(onnx_model)
+print("ONNX model of distance predictor is valid!")
+
+
+print("\nTesting distance predictor ONNX Runtime...")
+providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+ort_session = ort.InferenceSession(onnx_dist_pred, providers=providers)
+ort_inputs = {
+    "obsgoal_cond": dummy_obsgoal_cond.cpu().numpy(),
+}
+
+ort_outputs = ort_session.run(None, ort_inputs)
+print(ort_outputs)
+print(f"ONNX Runtime output shape: {ort_outputs[0].shape}") # One output only, distances
+
+# Verify outputs match
+print(f"\nVerifying outputs match...")
+test_cpu_dist_pred_output = test_dist_pred.cpu().numpy()
+max_diff_dist_pred = abs(test_cpu_dist_pred_output - ort_outputs[0]).max()
+print(f"Maximum difference for distance between PyTorch and ONNX: {max_diff_dist_pred}")
+
+print("---------------------- End of Distance Predictor ---------------------------------- \n")
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#############################################################################
+
+## DEBUG CODE BELOW - 
 
 # print("---------------------- Noise pred network -----------------------------")
 
 # noise_pred = model.noise_pred_net
 # noise_pred.eval()
 
+# print(inspect.isfunction(noise_pred.forward()))
+
 # dummy_sample      = torch.randn(1, 2, 16, device=device)
 # dummy_timestep    = torch.randint(0, 1000, (1,), device=device)
-# dummy_globalcond  = torch.randn(1, model_params["encoding_size"], device=device)
+# dummy_global_cond  = torch.randn(1, model_params["encoding_size"], device=device)
 
 
 # print("Testing forward pass for nomad noise pred network ...")
 # with torch.no_grad():
 
-#     test_noise_pred = noise_pred(dummy_sample, dummy_timestep, dummy_globalcond)
+#     test_noise_pred = noise_pred(dummy_sample, dummy_timestep, dummy_global_cond)
 
 #     print(
 #         f"Success forward pass for nomad noise pred network with shapes for model {test_noise_pred}"
@@ -154,35 +239,6 @@ print("---------------------- End of Vision Encoder ----------------------------
 
 
 
-# print("---------------------- Dist pred network -----------------------------")
-
-
-# dist_pred = model.dist_pred_net
-# dist_pred.eval()
-
-# dummy_cond = torch.randn(1, model_params["encoding_size"], device=device)
-
-
-# print("Testing forward pass for nomad dist pred network ...")
-# with torch.no_grad():
-
-#     test_dist_pred = dist_pred(dummy_cond)
-
-#     print(
-#         f"Success forward pass for nomad dist pred network with shapes for model {test_dist_pred}"
-#     )
-
-
-# torch.onnx.export(
-#     dist_pred,
-#     dummy_cond,
-#     "nomad_dist_pred_net.onnx",
-#     opset_version=17,
-#     input_names=["obsgoal_cond"],
-#     output_names=["distance_pred"],
-#     dynamic_axes={"obsgoal_cond": {0: "batch"}, 
-#                   "distance_pred": {0: "batch"}}
-# )
 
 
 
