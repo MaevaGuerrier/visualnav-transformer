@@ -65,51 +65,53 @@ dummy_input_goal_mask=dummy_mask.repeat(len(dummy_goal))
 print("Testing forward pass for nomad vision encoder ...")
 with torch.no_grad():
 
-    test_embedding = vision_encoder(dummy_obs, dummy_goal, dummy_input_goal_mask)
+    test_obs_encoding_tokens = vision_encoder(dummy_obs, dummy_goal, dummy_input_goal_mask)
 
     print(
-        f"Success forward pass for nomad vision encoder with shapes for model {test_embedding}"
+        f"Success forward pass for nomad vision encoder with shapes for model {test_obs_encoding_tokens}"
     )
 
-# print("\nExporting to vision encoder ONNX...")
-# torch.onnx.export(
-#     vision_encoder,
-#     (dummy_obs, dummy_goal),
-#     "nomad_vision_encoder.onnx",
-#     export_params=True,
-#     opset_version=17,
-#     do_constant_folding=True,
-#     input_names=["obs", "goal"],
-#     output_names=["embedding"],
-#     dynamic_axes={"obs": {0: "batch"}, 
-#                   "goal": {0: "batch"}, 
-#                   "embedding": {0: "batch"}
-#     },
-# )
+print("\nExporting to vision encoder ONNX...")
+torch.onnx.export(
+    vision_encoder,
+    (dummy_obs, dummy_goal, dummy_input_goal_mask),
+    "nomad_vision_encoder.onnx",
+    export_params=True,
+    opset_version=17,
+    do_constant_folding=True,
+    input_names=["obs_img", "goal_img", "input_goal_mask"], # This has to be the same as forward inputs (e.g., forward(self, obs_img: torch.tensor, goal_img: torch.tensor, input_goal_mask: torch.tensor = None))
+    output_names=["obs_encoding_tokens"], # This has to be the same as forward outputs (e.g., return output)
+    dynamic_axes={"obs_img": {0: "batch"}, 
+                  "goal_img": {0: "batch"}, 
+                  "input_goal_mask": {0: "batch"},
+                  "obs_encoding_tokens": {0: "batch"}
+    },
+)
 
 
-# onnx_model = onnx.load("nomad_vision_encoder.onnx")
-# onnx.checker.check_model(onnx_model)
-# print("ONNX model of vision encoder is valid!")
+onnx_model = onnx.load("nomad_vision_encoder.onnx")
+onnx.checker.check_model(onnx_model)
+print("ONNX model of vision encoder is valid!")
 
 
-# print("\nTesting vision encoder ONNX Runtime...")
-# providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-# ort_session = ort.InferenceSession("nomad_vision_encoder.onnx", providers=providers)
-# ort_inputs = {
-#     "obs_img": dummy_obs.cpu().numpy(),
-#     "goal_img": dummy_goal.cpu().numpy(),
-# }
+print("\nTesting vision encoder ONNX Runtime...")
+providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+ort_session = ort.InferenceSession("nomad_vision_encoder.onnx", providers=providers)
+ort_inputs = {
+    "obs_img": dummy_obs.cpu().numpy(),
+    "goal_img": dummy_goal.cpu().numpy(),
+    "input_goal_mask": dummy_input_goal_mask.cpu().numpy(),
+}
 
-# ort_outputs = ort_session.run(None, ort_inputs)
-# print(ort_outputs)
-# print(f"ONNX Runtime output shape: {ort_outputs[0].shape} and {ort_outputs[1].shape}")
+ort_outputs = ort_session.run(None, ort_inputs)
+print(ort_outputs)
+print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
 
-# # Verify outputs match
-# print(f"\nVerifying outputs match...")
-# test_cpu_embedding_output = test_embedding.cpu().numpy()
-# max_diff_embedding = abs(test_cpu_embedding_output - ort_outputs[0]).max()
-# print(f"Maximum difference between for distance PyTorch and ONNX: {max_diff_embedding}")
+# Verify outputs match
+print(f"\nVerifying outputs match...")
+test_cpu_obs_encoding_tokens_output = test_obs_encoding_tokens.cpu().numpy()
+max_diff_obs_encoding_tokens = abs(test_cpu_obs_encoding_tokens_output - ort_outputs[0]).max()
+print(f"Maximum difference between for distance PyTorch and ONNX: {max_diff_obs_encoding_tokens}")
 
 print("---------------------- End of Vision Encoder ---------------------------------- \n")
 
