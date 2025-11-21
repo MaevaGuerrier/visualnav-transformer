@@ -1,7 +1,3 @@
-import inspect
-from inspect import signature
-
-import random
 import torch
 import yaml
 import os
@@ -10,7 +6,6 @@ import onnxruntime as ort
 import onnx
 import einops
 import torch.nn as nn
-
 
 class NoisePredNetWrapper(nn.Module):
     def __init__(self, nomad_model):
@@ -24,6 +19,26 @@ class NoisePredNetWrapper(nn.Module):
         )
 
 
+class VisionEncoderWrapper(nn.Module):
+    def __init__(self, nomad_model):
+        super().__init__()
+        self.vision_encoder = nomad_model.vision_encoder
+
+    def forward(self, obs_img, goal_img, input_goal_mask):
+        # Call the underlying noise_pred_net directly with named arguments
+        return self.vision_encoder(
+            obs_img=obs_img, goal_img=goal_img, input_goal_mask=input_goal_mask
+        )
+
+
+class DistPredWrapper(nn.Module):
+    def __init__(self, nomad_model):
+        super().__init__()
+        self.dist_pred_net = nomad_model.dist_pred_net
+
+    def forward(self, obsgoal_cond):
+        return self.dist_pred_net(obsgoal_cond)
+    
 
 
 MODEL_WEIGHTS_PATH = "../model_weights"
@@ -65,241 +80,247 @@ model.eval()
 print("loading model")
 
 
-# print("------------------------ Vision Encoder --------------------------------")
+print("---------------------- Start Vision Encoder ----------------------------------")
 
-# vision_encoder = model.vision_encoder
-# vision_encoder.eval()
+dummy_goal = torch.randn(4, 3, 96, 96, device=device)
+# Nomad vision encoder takes in 4 past obs, each with 3 channels, img dim 96x96
+# Not consistent with paper https://arxiv.org/pdf/2310.07896, past 5 times obs Figure.2
+dummy_obs = torch.randn(4, 12, 96, 96, device=device) 
+# Issue in paper codebase 'goal_mask' referenced before assignment
+# Always set in code because input_goal mask is passed see line 80 and 114 in vint_train/models/nomad/nomad_vint.py
+dummy_mask = torch.zeros(1).long().to(device)  
+dummy_mask = dummy_mask.repeat(len(dummy_goal))
 
+vision_wrapper = VisionEncoderWrapper(model)
+vision_wrapper = vision_wrapper.to(device)
+vision_wrapper.eval()
+# model.eval()
 
-# dummy_goal = torch.randn(4, 3, 96, 96, device=device)
-# # Nomad vision encoder takes in 4 past obs, each with 3 channels, img dim 96x96
-# # Not consistent with paper https://arxiv.org/pdf/2310.07896, past 5 times obs Figure.2
-# dummy_obs = torch.randn(4, 12, 96, 96, device=device) 
+output_path = "nomad_vision_encoder.onnx"
 
-# # Issue in paper codebase 'goal_mask' referenced before assignment
-# # Always set in code because input_goal mask is passed see line 80 and 114 in vint_train/models/nomad/nomad_vint.py
-# dummy_mask = torch.zeros(1).long().to(device)  
-# dummy_input_goal_mask=dummy_mask.repeat(len(dummy_goal))
-
-# print("Testing forward pass for nomad vision encoder ...")
-# with torch.no_grad():
-
-#     test_obs_encoding_tokens = vision_encoder(dummy_obs, dummy_goal, dummy_input_goal_mask)
-
-#     print(
-#         f"Success forward pass for nomad vision encoder with shapes for model {test_obs_encoding_tokens}"
-#     )
-
-# print("\nExporting to vision encoder ONNX...")
-# torch.onnx.export(
-#     vision_encoder,
-#     (dummy_obs, dummy_goal, dummy_input_goal_mask),
-#     "nomad_vision_encoder.onnx",
-#     export_params=True,
-#     opset_version=17,
-#     do_constant_folding=True,
-#     input_names=["obs_img", "goal_img", "input_goal_mask"], # This has to be the same as forward inputs (e.g., forward(self, obs_img: torch.tensor, goal_img: torch.tensor, input_goal_mask: torch.tensor = None))
-#     output_names=["obs_encoding_tokens"], # This has to be the same as forward outputs (e.g., return output)
-#     dynamic_axes={"obs_img": {0: "batch"}, 
-#                   "goal_img": {0: "batch"}, 
-#                   "input_goal_mask": {0: "batch"},
-#                   "obs_encoding_tokens": {0: "batch"}
-#     },
-# )
-
-
-# onnx_model = onnx.load("nomad_vision_encoder.onnx")
-# onnx.checker.check_model(onnx_model)
-# print("ONNX model of vision encoder is valid!")
-
-
-# print("\nTesting vision encoder ONNX Runtime...")
-# providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-# ort_session = ort.InferenceSession("nomad_vision_encoder.onnx", providers=providers)
-# ort_inputs = {
-#     "obs_img": dummy_obs.cpu().numpy(),
-#     "goal_img": dummy_goal.cpu().numpy(),
-#     "input_goal_mask": dummy_input_goal_mask.cpu().numpy(),
-# }
-
-# ort_outputs = ort_session.run(None, ort_inputs)
-# print(ort_outputs)
-# print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
-
-# # Verify outputs match
-# print(f"\nVerifying outputs match...")
-# test_cpu_obs_encoding_tokens_output = test_obs_encoding_tokens.cpu().numpy()
-# max_diff_obs_encoding_tokens = abs(test_cpu_obs_encoding_tokens_output - ort_outputs[0]).max()
-# print(f"Maximum difference for distance between PyTorch and ONNX: {max_diff_obs_encoding_tokens}")
-
-# print("---------------------- End of Vision Encoder ---------------------------------- \n")
-
-
-
-# print("---------------------- Dist pred network -----------------------------")
-
-
-# dist_pred_net = model.dist_pred_net
-# dist_pred_net.eval()
-
-# # obsgoal_cond = model('vision_encoder', ...
-# # dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond) --> dist takes inputs of obsgoal_cond
-# # test_obs_encoding_tokens.shape torch.Size([4, 256])
-# dummy_obsgoal_cond = torch.randn(test_obs_encoding_tokens.shape[0], test_obs_encoding_tokens.shape[1], device=device)
-# # VERY IMPORTANT the first input can be changed (see --radius in navigate.py)
-
-# print("Testing forward pass for nomad dist pred network ...")
-# with torch.no_grad():
-
-#     test_dist_pred = dist_pred_net(dummy_obsgoal_cond)
-
-#     print(
-#         f"Success forward pass for nomad dist pred network with shapes for model {test_dist_pred}"
-#     )
-
-# onnx_dist_pred = "nomad_dist_pred_net.onnx"
-
-# torch.onnx.export(
-#     dist_pred_net,
-#     dummy_obsgoal_cond,
-#     onnx_dist_pred,
-#     opset_version=17,
-#     input_names=["obsgoal_cond"],
-#     output_names=["distances_pred"],
-#     dynamic_axes={"obsgoal_cond": {0: "batch"}, 
-#                   "distances_pred": {0: "batch"}}
-# )
-
-
-# onnx_model = onnx.load(onnx_dist_pred)
-# onnx.checker.check_model(onnx_model)
-# print("ONNX model of distance predictor is valid!")
-
-
-# print("\nTesting distance predictor ONNX Runtime...")
-# providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-# ort_session = ort.InferenceSession(onnx_dist_pred, providers=providers)
-# ort_inputs = {
-#     "obsgoal_cond": dummy_obsgoal_cond.cpu().numpy(),
-# }
-
-# ort_outputs = ort_session.run(None, ort_inputs)
-# print(ort_outputs)
-# print(f"ONNX Runtime output shape: {ort_outputs[0].shape}") # One output only, distances
-
-# # Verify outputs match
-# print(f"\nVerifying outputs match...")
-# test_cpu_dist_pred_output = test_dist_pred.cpu().numpy()
-# max_diff_dist_pred = abs(test_cpu_dist_pred_output - ort_outputs[0]).max()
-# print(f"Maximum difference for distance between PyTorch and ONNX: {max_diff_dist_pred}")
-
-# print("---------------------- End of Distance Predictor ---------------------------------- \n")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#############################################################################
-
-## DEBUG CODE BELOW - 
-
-print("---------------------- Noise pred network -----------------------------")
-
-noise_pred = model.noise_pred_net
-noise_pred.eval()
-
-# print(signature(noise_pred.forward))
-# (sample: torch.Tensor, timestep: Union[torch.Tensor, float, int], local_cond=None, global_cond=None, **kwargs)
-# SHAPES e.g.,: sample/naction torch.Size([8, 8, 2]), noise_pred torch.Size([8, 8, 2]), timestep 9, obs_cond torch.Size([8, 256])
-# This can be changes by user actually - see navigate.py 
-dummy_sample = torch.randn(8, 8, 2, device=device)
-# noise_scheduler.timesteps: tensor([9, 8, 7, 6, 5, 4, 3, 2, 1, 0])
-# high is included
-# Diffusion timestep: val e.g., 9, type: <class 'torch.Tensor'> torch type: torch.int64, shape torch.Size([])
-dummy_timestep = torch.randint(low=0, high=model_params["num_diffusion_iters"], size=(), device=device, dtype=torch.int64)
-
-# same as obsgoal_cond from vision encoder output
-dummy_global_cond = torch.randn(8, model_params["encoding_size"], device=device) 
-dummy_local_cond = None  # not used in nomad codebase
-
-print("Testing forward pass for nomad noise pred network ...")
+print("Testing forward pass for vision_encoder ...")
 with torch.no_grad():
+    test_vision_output = model(
+        "vision_encoder",
+        obs_img=dummy_obs,
+        goal_img=dummy_goal,
+        input_goal_mask=dummy_mask,
+    )
 
-    # IMPORTANT: local_cond is never used in nomad codebase, thus we have to precise parameters by name
-    test_noise_pred = noise_pred(sample=dummy_sample, timestep=dummy_timestep, local_cond=dummy_local_cond, global_cond=dummy_global_cond)
+    wrapper_vision_output = vision_wrapper(
+        obs_img=dummy_obs,
+        goal_img=dummy_goal,
+        input_goal_mask=dummy_mask,
+    )
 
     print(
-        f"Success forward pass for nomad noise pred network with shapes for model {test_noise_pred.shape}"
+        f"Success forward pass for vision encoder with shapes for model {test_vision_output.shape} and {wrapper_vision_output.shape}"
     )
 
 
-onnx_noise_pred = "nomad_noise_pred_net.onnx"
-
-# ONNX gaph does not keep track of optional parameters in forward method
-# Hence why we are using the wrapper
-# Create wrapper
-wrapper_noise_pred = NoisePredNetWrapper(model)
-wrapper_noise_pred = wrapper_noise_pred.to(device)
-wrapper_noise_pred.eval()
-
+print("\nExporting to vision encoder ONNX...")
 torch.onnx.export(
-    wrapper_noise_pred,
-    (dummy_sample, dummy_timestep, dummy_global_cond),
-    onnx_noise_pred,
+    vision_wrapper,
+    (dummy_obs, dummy_goal, dummy_mask),
+    output_path,
     export_params=True,
     opset_version=17,
     do_constant_folding=True,
-    input_names=["sample", "timestep", "global_cond"],
-    output_names=["output"],
-    dynamic_axes=None,  # Fixed batch size of 8
+    input_names=["obs_img", "goal_img", "input_goal_mask"], # This has to be the same as forward inputs (e.g., forward(self, obs_img: torch.tensor, goal_img: torch.tensor, input_goal_mask: torch.tensor = None))
+    output_names=["obs_encoding_tokens"], # This has to be the same as forward outputs (e.g., return output)
+    dynamic_axes={
+    "obs_img": {0: "batch_size"}, # we need it because of radius change at first 4 obs (start) then 6 obs (rad 2) 
+    "goal_img": {0: "batch_size"},
+    "input_goal_mask": {0: "batch_size"},
+    "obs_encoding_tokens": {0: "batch_size"}, 
+    },
 )
 
-print("converting noise_pred_net to onnx")
 
-
-onnx_model = onnx.load(onnx_noise_pred)
+onnx_model = onnx.load(output_path)
 onnx.checker.check_model(onnx_model)
-print("ONNX model is valid!")
+print("ONNX model of vision encoder is valid!")
 
-# # Optional: Test with ONNX Runtime
+# Optional: Test with ONNX Runtime
 
 
-# print("\nTesting ONNX Runtime...")
+print("\nTesting vision encoder ONNX Runtime...")
 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-ort_session = ort.InferenceSession(onnx_noise_pred, providers=providers)
+ort_session = ort.InferenceSession(output_path, providers=providers)
 ort_inputs = {
-    "sample": dummy_sample.cpu().numpy(),
-    "timestep": dummy_timestep.cpu().numpy(),
-    "global_cond": dummy_global_cond.cpu().numpy(),
+    "obs_img": dummy_obs.cpu().numpy(),
+    "goal_img": dummy_goal.cpu().numpy(),
+    "input_goal_mask": dummy_mask.cpu().numpy(),
 }
 ort_outputs = ort_session.run(None, ort_inputs)
 print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
 
-# # Verify outputs match
+
+# Verify outputs match
 print(f"\nVerifying outputs match...")
-torch_output = test_noise_pred.cpu().numpy()
-max_diff = abs(torch_output - ort_outputs[0]).max()
-print(f"Maximum difference between PyTorch and ONNX: {max_diff}")
+wrapper_cpu_output = wrapper_vision_output.cpu().numpy()
+test_vision_cpu_output = test_vision_output.cpu().numpy()
+max_diff_wrapper = abs(wrapper_cpu_output - ort_outputs[0]).max()
+max_diff_model = abs(test_vision_cpu_output - ort_outputs[0]).max()
+print(
+    f"Maximum difference between PyTorch and ONNX: {max_diff_wrapper} & {max_diff_model}"
+)
 
-print("---------------------- End of Noise Predictor ---------------------------------- \n")
+
+print("---------------------- End of Vision Encoder ----------------------------------")
 
 
+print("------------------------ Distance Pred Network --------------------------------")
+print("converting dist pred network to onnx")
+# obsgoal_cond = model('vision_encoder', ...
+# dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond) --> dist takes inputs of obsgoal_cond
+# test_obs_encoding_tokens.shape torch.Size([4, 256])
+# VERY IMPORTANT the first input can be changed (see --radius in navigate.py)
+dummy_goalcond = torch.randn(4, 256, device=device)
+dist_wrapper = DistPredWrapper(model)
+dist_wrapper = dist_wrapper.to(device)
+dist_wrapper.eval()
+
+output_path = "nomad_dist_pred_net.onnx"
+
+print("Testing forward pass for dist pred encoder ...")
+with torch.no_grad():
+    test_distance_output = model(
+        "dist_pred_net",
+        obsgoal_cond=dummy_goalcond,
+    )
+
+    wrapper_dist_output = dist_wrapper(
+        dummy_goalcond,
+    )
+
+    print(
+        f"Success forward pass for distance encoder with shapes for model {test_distance_output.shape} and {wrapper_dist_output.shape}"
+    )
+
+print("\nExporting to dist encoder ONNX...")
+torch.onnx.export(
+    dist_wrapper,
+    dummy_goalcond,
+    output_path,
+    export_params=True,
+    opset_version=17,
+    do_constant_folding=True,
+    input_names=["obsgoal_cond"],
+    output_names=["distances_pred"],
+    dynamic_axes={
+    "obsgoal_cond": {0: "batch_size"}, 
+    },
+)
+
+
+onnx_model = onnx.load(output_path)
+onnx.checker.check_model(onnx_model)
+print("ONNX model of dist encoder is valid!")
+
+
+print("\nTesting dist encoder ONNX Runtime...")
+providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+ort_session = ort.InferenceSession(output_path, providers=providers)
+ort_inputs = {
+    "obsgoal_cond": dummy_goalcond.cpu().numpy(),
+}
+ort_outputs = ort_session.run(None, ort_inputs)
+print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
+
+# Verify outputs match
+print(f"\nVerifying outputs match...")
+wrapper_cpu_output = wrapper_dist_output.cpu().numpy()
+test_cpu_output = test_distance_output.cpu().numpy()
+max_diff_wrapper = abs(wrapper_cpu_output - ort_outputs[0]).max()
+max_diff_model = abs(test_cpu_output - ort_outputs[0]).max()
+print(
+    f"Maximum difference between PyTorch and ONNX: {max_diff_wrapper} & {max_diff_model}"
+)
+
+
+print("---------------------- End of Dist Encoder ----------------------------------")
+
+# print("------------------------------- noise pred net --------------------------- ")
+# # print(signature(noise_pred.forward))
+# # IMPORTANT: local_cond is never used in nomad codebase
+# # (sample: torch.Tensor, timestep: Union[torch.Tensor, float, int], local_cond=None, global_cond=None, **kwargs)
+
+# batch_size = 8
+
+# # Create dummy inputs matching your model's expected input format
+# sequence_length = 8
+# input_dim = 2
+# encoding_size = 256
+
+# # Create dummy input tensor (batch_size, input_dim, sequence_length) on CUDA
+# dummy_input = torch.randn(batch_size, sequence_length, input_dim).to(device)
+
+# # Create dummy global condition (batch_size, encoding_size) on CUDA
+# dummy_global_cond = torch.randn(batch_size, encoding_size).to(device)
+
+# # Diffusion timestep: val e.g., 9, type: <class 'torch.Tensor'> torch type: torch.int64, shape torch.Size([])
+# dummy_timestep = torch.randint(low=0, high=model_params["num_diffusion_iters"], size=(), device=device, dtype=torch.int64)
+
+
+# # Test forward pass first to make sure it works
+# print("Testing forward pass...")
+# with torch.no_grad():
+#     test_output = model(
+#         "noise_pred_net",
+#         sample=dummy_input,
+#         timestep=dummy_timestep,
+#         global_cond=dummy_global_cond,
+#     )
+#     print(f"Forward pass successful! Output shape: {test_output.shape}")
+
+
+# # Export to ONNX
+# output_path = "nomad_noise_pred_net.onnx"
+
+# # Create wrapper
+# wrapper = NoisePredNetWrapper(model)
+# wrapper = wrapper.to(device)
+# wrapper.eval()
+
+# print("\nExporting to ONNX...")
+# torch.onnx.export(
+#     wrapper,
+#     (dummy_input, dummy_timestep, dummy_global_cond),
+#     output_path,
+#     export_params=True,
+#     opset_version=17,
+#     do_constant_folding=True,
+#     input_names=["sample", "timestep", "global_cond"],
+#     output_names=["output"],
+#     dynamic_axes=None,  # Fixed batch size of 8
+# )
+
+
+# print("converting noise_pred_net to onnx")
+
+
+# onnx_model = onnx.load(output_path)
+# onnx.checker.check_model(onnx_model)
+# print("ONNX model is valid!")
+
+# # # Optional: Test with ONNX Runtime
+
+
+# # print("\nTesting ONNX Runtime...")
+# providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+# ort_session = ort.InferenceSession(output_path, providers=providers)
+# ort_inputs = {
+#     "sample": dummy_input.cpu().numpy(),
+#     "timestep": dummy_timestep.cpu().numpy(),
+#     "global_cond": dummy_global_cond.cpu().numpy(),
+# }
+# ort_outputs = ort_session.run(None, ort_inputs)
+# print(f"ONNX Runtime output shape: {ort_outputs[0].shape}")
+
+
+# # Verify outputs match
+# print(f"\nVerifying outputs match...")
+# torch_output = test_output.cpu().numpy()
+# max_diff = abs(torch_output - ort_outputs[0]).max()
+# print(f"Maximum difference between PyTorch and ONNX: {max_diff}")
