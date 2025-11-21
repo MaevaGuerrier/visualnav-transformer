@@ -92,10 +92,6 @@ MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
 VEL_TOPIC = robot_config["vel_navi_topic"]
 
-# GLOBALS
-context_queue = []
-context_size = None  
-subgoal = []
 
 # Load the model 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -117,24 +113,8 @@ def main(args: argparse.Namespace):
     with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
-    
     context_size = model_params["context_size"]
     assert context_size != None
-
-    # load model weights
-    ckpth_path = model_paths["nomad"]["ckpt_path"]
-    if os.path.exists(ckpth_path):
-        print(f"Loading model from {ckpth_path}")
-    else:
-        raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
-    model = load_model(
-        ckpth_path,
-        model_params,
-        device,
-    )
-    model = model.to(device)
-    model.eval()
-
 
     num_diffusion_iters = model_params["num_diffusion_iters"]
     noise_scheduler = DDPMScheduler(
@@ -151,11 +131,14 @@ def main(args: argparse.Namespace):
     print("loaded vision encoder onnx model")
     ort_sess_dist_pred = load_model_onnx("nomad_dist_pred_net")
     print("loaded distance predictor onnx model")
+    ort_sess_noise_pred = load_model_onnx("nomad_noise_pred_net")
+    # print("loaded noise predictor onnx model")
     # load topomap
     topomap_filenames = sorted(
         os.listdir(os.path.join(TOPOMAP_IMAGES_DIR, args.dir)),
         key=lambda x: int(x.split(".")[0]),
     )
+    # print("loaded topomap images")
     topomap_dir = f"{TOPOMAP_IMAGES_DIR}/{args.dir}"
     num_nodes = len(os.listdir(topomap_dir))
     topomap = []
@@ -190,12 +173,14 @@ def main(args: argparse.Namespace):
     closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
 
     # navigation loop
+    # print("befre while loop")
     while not rospy.is_shutdown():
         # EXPLORATION MODE
         # print("in ros")
+        # print("context_queue length:", len(context_queue))
         chosen_waypoint = np.zeros(4)
         if len(context_queue) > model_params["context_size"]:
-                # print("init")
+                # print("init context_queue")
                 start = max(closest_node - args.radius, 0)
                 end = min(closest_node + args.radius + 1, goal_node)
                 distances = []
@@ -275,60 +260,68 @@ def main(args: argparse.Namespace):
                 closest_node_pub.publish(closest_node_msg)
                 
                 sg_idx = min(min_dist_idx + int(distances[min_dist_idx] < args.close_threshold), len(obsgoal_cond) - 1)
-                obs_cond = obsgoal_cond[sg_idx]
-
-
-                torch_obs_cond = torch.from_numpy(np.asarray(obs_cond)).to(device)
-
+                obs_cond_np = obsgoal_cond[sg_idx]
+        
                 # infer action
                 with torch.no_grad():
                     # encoder vision features
-                    if len(obs_cond.shape) == 2:
-                        obs_cond = torch_obs_cond.repeat(args.num_samples, 1)
+                    if len(obs_cond_np.shape) == 2:
+                            obs_cond_np = np.tile(obs_cond_np, (args.num_samples, 1))
                     else:
-                        obs_cond = torch_obs_cond.repeat(args.num_samples, 1, 1)
-                    
-                    
-                    if obs_cond.dim() == 3 and obs_cond.size(1) == 1:
-                        obs_cond = obs_cond.squeeze(1)
+                        obs_cond_np = np.tile(obs_cond_np, (args.num_samples, 1, 1))
 
-                    # print(f"obs_cond shape for diffusion: {obs_cond.shape}")
+                    # we need eq. global_cond torch.Size([8, 256])
+                    if obs_cond_np.ndim == 3 and obs_cond_np.shape[1] == 1:
+                        obs_cond_np = obs_cond_np.squeeze(1)
+
+                    
                     # initialize action from Gaussian noise
-                    noisy_action = torch.randn(
-                        (args.num_samples, model_params["len_traj_pred"], 2), device=device)
-                    naction = noisy_action
+                    naction_np = np.random.randn(
+                        args.num_samples, model_params["len_traj_pred"], 2
+                    ).astype(np.float32)
 
                     # init scheduler
                     noise_scheduler.set_timesteps(num_diffusion_iters)
 
                     start_time = time.time()
-                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")    
+                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")   
                     
                     for k in noise_scheduler.timesteps[:]:
                         # predict noise
-                        noise_pred = model(
-                            'noise_pred_net',
-                            sample=naction,
-                            timestep=k,
-                            global_cond=obs_cond
-                        )
-                        # print(f"SHAPES: naction {naction.shape}, noise_pred {noise_pred.shape}, timestep {k}, obs_cond {obs_cond.shape}")
-                        
+                        # k is torch
+                        # batch = naction_np.shape[0]
+                        # k_np = np.full((batch, 1), int(k), dtype=np.int64)
+                        k_np = np.repeat(int(k.item()), 8).astype(np.int64)
+                        # print(f"Shape obs_cond_np: {obs_cond_np.shape}, naction_np: {naction_np.shape}, k_np: {k_np.shape}")
+                        # This need to be: Shape obs_cond_np: (8, 256), naction_np: (8, 8, 2), k_np: (8,)
+                        ort_sess_noise_pred_inputs = {
+                            "sample": naction_np,   
+                            "timestep": k_np,
+                            "global_cond": obs_cond_np,
+                        }
+                        noise_pred = ort_sess_noise_pred.run(None, ort_sess_noise_pred_inputs)[0]
+                        # naction shape (8, 8, 2) type <class 'numpy.ndarray'>, noise_pred shape (8, 8, 2) type <class 'numpy.ndarray'>, k 9 type <class 'int'>
                         # inverse diffusion step (remove noise)
-                        naction = noise_scheduler.step(
-                            model_output=noise_pred,
-                            timestep=k,
-                            sample=naction
+                        # DDPMScheduler need torch tensors (@TODO find a numpy implementation?)
+                        noise_pred_torch = torch.from_numpy(noise_pred).float().to(device)
+                        naction_torch    = torch.from_numpy(naction_np).float().to(device)
+                        naction_np = noise_scheduler.step(
+                            model_output=noise_pred_torch,
+                            timestep=int(k.item()),
+                            sample=naction_torch
                         ).prev_sample
+                        print(f"After noise scheduler")
+                        naction_np = naction_torch.cpu().numpy()
+                        print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
+
                     print("time elapsed:", time.time() - start_time)
 
-                naction = to_numpy(get_action(naction))
                 sampled_actions_msg = Float32MultiArray()
-                sampled_actions_msg.data = np.concatenate((np.array([0]), naction.flatten()))
+                sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
                 print("published sampled actions")
                 sampled_actions_pub.publish(sampled_actions_msg)
-                naction = naction[0] 
-                chosen_waypoint = naction[args.waypoint]
+                naction_np = naction_np[0] 
+                chosen_waypoint = naction_np[args.waypoint]
 
 # ------------------
 
