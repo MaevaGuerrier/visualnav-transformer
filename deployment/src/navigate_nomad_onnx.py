@@ -18,6 +18,10 @@ from utils_onnx import msg_to_pil, transform_images, load_model_trt, load_model_
 from utils import load_model, to_numpy
 from vint_train.training.train_utils import get_action
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+
+
+from ddpms_scheduler_np import DDPMSchedulerNumPy
+
 # --------------------------------------------------------------------------------
 
 # from vint_train.training.train_utils import get_action
@@ -122,17 +126,17 @@ def main(args: argparse.Namespace):
         beta_schedule='squaredcos_cap_v2',
         clip_sample=True,
         prediction_type='epsilon'
-    )
+    )   
 
     # -------------------------------------------------------------------------------------------------------------
 
     # trt_vision_encoder = load_model_trt("nomad_vision_encoder.trt")
-    ort_sess_vis_encoder = load_model_onnx("nomad_vision_encoder")
-    print("loaded vision encoder onnx model")
-    ort_sess_dist_pred = load_model_onnx("nomad_dist_pred_net")
-    print("loaded distance predictor onnx model")
+    trt_vis_encoder = load_model_trt("nomad_vision_encoder.trt")
+    print("loaded vision encoder trt model")
+    trt_dist_pred = load_model_trt("nomad_dist_pred_net.trt")
+    print("loaded distance predictor trt model")
     ort_sess_noise_pred = load_model_onnx("nomad_noise_pred_net")
-    # print("loaded noise predictor onnx model")
+    print("loaded noise predictor onnx model")
     # load topomap
     topomap_filenames = sorted(
         os.listdir(os.path.join(TOPOMAP_IMAGES_DIR, args.dir)),
@@ -203,11 +207,11 @@ def main(args: argparse.Namespace):
                 batch_goal_data_np = np.concatenate([
                     transform_images(sg_img, model_params["image_size"], center_crop=crop)
                     for sg_img in goal_imgs
-                ], axis=0).astype('float16')
+                ], axis=0).astype('float32')
 
                 # Repeat observation for batch
                 num_goals = len(goal_imgs)
-                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float16')
+                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
                 input_goal_mask_np = np.zeros((num_goals,), dtype=np.int64)
                 # print(f"type batch_obs_imgs_np {batch_obs_imgs_np.dtype}, batch_goal_data_np {batch_goal_data_np.dtype}")
                 # print(f"len batch_obs_imgs_np {len(batch_obs_imgs_np)}, len batch_goal_data_np {len(batch_goal_data_np)}")
@@ -228,27 +232,17 @@ def main(args: argparse.Namespace):
                 # obs image shape: torch.Size([4, 12, 96, 96]), 
                 # mask shape: torch.Size([4])
                 
-                # obsgoal_cond = trt_vision_encoder.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np, input_goal_mask=input_goal_mask_np)
-                
-                ort_inputs = {
-                    "obs_img": batch_obs_imgs_np.astype(np.float32),
-                    "goal_img": batch_goal_data_np.astype(np.float32),
-                    "input_goal_mask": input_goal_mask_np.astype(np.int64),
-                }
-                obsgoal_cond = ort_sess_vis_encoder.run(None, ort_inputs)[0]
-                
-                # print(f"Vision encoder Inference time without torch {time.time() - time_0}")
-                # print(obsgoal_cond)
-                
-                # distances = model("dist_pred_net", obsgoal_cond=torch_obsgoal_cond)
-                ort_inputs = {
-                    "obsgoal_cond": obsgoal_cond,
-                }
-                time_1 = time.time()
-                distances =  ort_sess_dist_pred.run(None, ort_inputs)[0]
-                # print(f"Distance prediction Inference time without torch {time.time() - time_1}")
-                # print("distances:", distances, distances.shape)
+                # print(f"Shape batch_obs_imgs_np {batch_obs_imgs_np.shape} goal {batch_goal_data_np.shape} mask {input_goal_mask_np.shape}")
+                obsgoal_cond = trt_vis_encoder.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np, input_goal_mask=input_goal_mask_np)
+                # print(f"obscond {obsgoal_cond}")
+                obsgoal_cond = obsgoal_cond[0]
+                # print(f"obscond after {obsgoal_cond}")
+                distances = trt_dist_pred.infer(obsgoal_cond=obsgoal_cond)
+                # print("distances before:", distances)
+                distances = distances[0]
+                # print("distances after:", distances)
                 min_dist_idx = np.argmin(distances)
+                
                 
                
 # -----------------
@@ -283,9 +277,7 @@ def main(args: argparse.Namespace):
                     # init scheduler
                     noise_scheduler.set_timesteps(num_diffusion_iters)
 
-                    start_time = time.time()
-                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")   
-                    
+        
                     for k in noise_scheduler.timesteps[:]:
                         # predict noise
                         k_np = np.array(k.cpu().item(), dtype=np.int64)
@@ -312,11 +304,13 @@ def main(args: argparse.Namespace):
                         ).prev_sample
                         # print(f"After noise scheduler")
                         naction_np = naction_torch.detach().cpu().numpy()
-                        # print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
+                        # print(f"naction after noise scheduler {naction_np}")
+
 
                     print("time elapsed:", time.time() - time_0)
-
+                naction_torch = torch.from_numpy(naction_np).float().to(device)
                 naction_np = to_numpy(get_action(naction_torch))
+                # naction_np = get_action(naction_np)
                 sampled_actions_msg = Float32MultiArray()
                 sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
                 print("published sampled actions")
