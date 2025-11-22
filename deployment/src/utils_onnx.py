@@ -250,16 +250,18 @@ class TRTInfer:
 
 
 def load_model_onnx(model_name: str):
-    providers = [
-        (
-            "TensorrtExecutionProvider",
-            {
-                "trt_fp16_enable": False,
-                "trt_engine_cache_enable": True,
-                "trt_engine_cache_path": "./trt_cache",
-            },
-        )
-    ]
+    # providers = [
+    #     (
+    #         "TensorrtExecutionProvider",
+    #         {
+    #             "trt_fp16_enable": False,
+    #             "trt_engine_cache_enable": True,
+    #             "trt_engine_cache_path": "./trt_cache",
+    #         },
+    #     )
+    # ]
+
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]  
 
     sess_options = ort.SessionOptions()
     sess_options.log_severity_level = 0
@@ -272,7 +274,7 @@ def load_model_onnx(model_name: str):
 
 def load_model_trt(model_name: str):
 
-    trt_model = TRTInfer("vint.trt")
+    trt_model = TRTInfer(model_name)
 
     return trt_model
 
