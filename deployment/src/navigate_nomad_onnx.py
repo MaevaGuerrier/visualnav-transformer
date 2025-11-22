@@ -237,7 +237,7 @@ def main(args: argparse.Namespace):
                 }
                 obsgoal_cond = ort_sess_vis_encoder.run(None, ort_inputs)[0]
                 
-                print(f"Vision encoder Inference time without torch {time.time() - time_0}")
+                # print(f"Vision encoder Inference time without torch {time.time() - time_0}")
                 # print(obsgoal_cond)
                 
                 # distances = model("dist_pred_net", obsgoal_cond=torch_obsgoal_cond)
@@ -246,7 +246,7 @@ def main(args: argparse.Namespace):
                 }
                 time_1 = time.time()
                 distances =  ort_sess_dist_pred.run(None, ort_inputs)[0]
-                print(f"Distance prediction Inference time without torch {time.time() - time_1}")
+                # print(f"Distance prediction Inference time without torch {time.time() - time_1}")
                 # print("distances:", distances, distances.shape)
                 min_dist_idx = np.argmin(distances)
                 
@@ -266,7 +266,7 @@ def main(args: argparse.Namespace):
                 with torch.no_grad():
                     # encoder vision features
                     if len(obs_cond_np.shape) == 2:
-                            obs_cond_np = np.tile(obs_cond_np, (args.num_samples, 1))
+                        obs_cond_np = np.tile(obs_cond_np, (args.num_samples, 1))
                     else:
                         obs_cond_np = np.tile(obs_cond_np, (args.num_samples, 1, 1))
 
@@ -289,33 +289,34 @@ def main(args: argparse.Namespace):
                     for k in noise_scheduler.timesteps[:]:
                         # predict noise
                         k_np = np.array(k.cpu().item(), dtype=np.int64)
-                        print(f"Shape obs_cond_np: {obs_cond_np.shape}, naction_np: {naction_np.shape}, k_np: {k_np.shape}")
-                        print(f"Type obs_cond_np: {type(obs_cond_np)}, naction_np: {type(naction_np)}, k_np: {type(k_np)}")
-                        print("before ort sess noise pred")
+                        # print(f"Shape obs_cond_np: {obs_cond_np.shape}, naction_np: {naction_np.shape}, k_np: {k_np.shape}")
+                        # print(f"Type obs_cond_np: {type(obs_cond_np)}, naction_np: {type(naction_np)}, k_np: {type(k_np)}")
+                        # print("before ort sess noise pred")
                         ort_sess_noise_pred_inputs = {
                             "sample": naction_np,   
                             "timestep": k_np,
                             "global_cond": obs_cond_np,
                         }
                         noise_pred = ort_sess_noise_pred.run(None, ort_sess_noise_pred_inputs)[0]
-                        print("after ort sess noise pred")
+                        # print("after ort sess noise pred")
                         # naction shape (8, 8, 2) type <class 'numpy.ndarray'>, noise_pred shape (8, 8, 2) type <class 'numpy.ndarray'>, k 9 type <class 'int'>
                         # inverse diffusion step (remove noise)
                         # DDPMScheduler need torch tensors (@TODO find a numpy implementation?)
                         noise_pred_torch = torch.from_numpy(noise_pred).float().to(device)
                         naction_torch = torch.from_numpy(naction_np).float().to(device)
-                        print("before noise scheduler")
+                        # print("before noise scheduler")
                         naction_torch = noise_scheduler.step(
                             model_output=noise_pred_torch,
                             timestep=k,
                             sample=naction_torch
                         ).prev_sample
-                        print(f"After noise scheduler")
-                        naction_np = naction_torch.cpu().numpy()
-                        print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
+                        # print(f"After noise scheduler")
+                        naction_np = naction_torch.detach().cpu().numpy()
+                        # print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
 
-                    print("time elapsed:", time.time() - start_time)
+                    print("time elapsed:", time.time() - time_0)
 
+                naction_np = to_numpy(get_action(naction_torch))
                 sampled_actions_msg = Float32MultiArray()
                 sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
                 print("published sampled actions")
