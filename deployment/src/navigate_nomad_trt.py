@@ -308,6 +308,7 @@ def main(args: argparse.Namespace):
 
 
                     print("time elapsed:", time.time() - time_0)
+                    
                 naction_torch = torch.from_numpy(naction_np).float().to(device)
                 naction_np = to_numpy(get_action(naction_torch))
                 # naction_np = get_action(naction_np)

@@ -160,7 +160,6 @@ def main(args: argparse.Namespace):
                 end = min(closest_node + args.radius + 1, goal_node)
                 goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in topomap[start:end + 1]]
                 goal_image = torch.concat(goal_image, dim=0)
-
                 obsgoal_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
                 dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
                 dists = to_numpy(dists.flatten())
@@ -170,6 +169,9 @@ def main(args: argparse.Namespace):
                 closest_node_msg = Int32()
                 closest_node_msg.data = closest_node
                 closest_node_pub.publish(closest_node_msg)
+
+                print(f"dtype obs images: {obs_images.dtype}, goal_image: {goal_image.dtype}")
+                print(f"len obs_image {len(obs_images)}, len goal_image {len(goal_image)}")
                 
                 sg_idx = min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)
                 obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
@@ -181,6 +183,7 @@ def main(args: argparse.Namespace):
                         obs_cond = obs_cond.repeat(args.num_samples, 1)
                     else:
                         obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
+                    print(f"obs_cond shape for diffusion: {obs_cond.shape}")
                     
                     # initialize action from Gaussian noise
                     noisy_action = torch.randn(
@@ -191,7 +194,19 @@ def main(args: argparse.Namespace):
                     noise_scheduler.set_timesteps(num_diffusion_iters)
 
                     start_time = time.time()
+                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")    
+                    
                     for k in noise_scheduler.timesteps[:]:
+                        print(f"Diffusion timestep: {k} type: {type(k)} torch type: {k.dtype} shape {k.shape}")
+                        # print type and shape of inputs
+                        print(f"SHAPES: obs_cond {obs_cond.shape}, naction {naction.shape}")
+                        print(f"DTYPES: obs_cond {obs_cond.dtype}, naction {naction.dtype}")
+                        print(f"timestep k: {k} type: {type(k)} torch type: {k.dtype} shape {k.shape}")
+
+                        # global_cond torch.Size([8, 256])
+                        # sample torch.Size([8, 8, 2])
+                        # timestep (1,)
+
                         # predict noise
                         noise_pred = model(
                             'noise_pred_net',
@@ -199,6 +214,8 @@ def main(args: argparse.Namespace):
                             timestep=k,
                             global_cond=obs_cond
                         )
+                        # print(f"SHAPES: naction {naction.shape}, noise_pred {noise_pred.shape}, timestep {k}, obs_cond {obs_cond.shape}")
+                        
                         # inverse diffusion step (remove noise)
                         naction = noise_scheduler.step(
                             model_output=noise_pred,
@@ -332,7 +349,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        default="vint",
+        default="nomad",
         type=str,
         help="model name (only nomad is supported) (hint: check ../config/models.yaml) (default: nomad)",
     )
@@ -347,7 +364,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="topomap",
+        default="sim_test",
         type=str,
         help="path to topomap images",
     )

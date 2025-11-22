@@ -11,7 +11,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray, Int32
 from nav_msgs.msg import Path
-from utils_onnx import msg_to_pil, transform_images, load_model_onnx
+from utils_onnx import msg_to_pil, transform_images, load_model_trt
 
 # from vint_train.training.train_utils import get_action
 # import torch
@@ -65,7 +65,7 @@ def callback_obs(msg):
 def main(args: argparse.Namespace):
     global context_size
 
-    vint_onnx = load_model_onnx("vint")
+    trt_model = load_model_trt(args.model)
     print("loaded model")
     # load topomap
     topomap_filenames = sorted(
@@ -134,11 +134,11 @@ def main(args: argparse.Namespace):
                 batch_goal_data_np = np.concatenate([
                     transform_images(sg_img, model_params["image_size"], center_crop=crop)
                     for sg_img in goal_imgs
-                ], axis=0).astype('float32')
+                ], axis=0).astype('float16')
 
                 # Repeat observation for batch
                 num_goals = len(goal_imgs)
-                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
+                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float16')
                 
 
                 # print("batch_obs_imgs shape:", batch_obs_imgs)
@@ -154,13 +154,7 @@ def main(args: argparse.Namespace):
                 
                 
                 # distances, waypoints = ort_outputs[0], ort_outputs[1]
-
-
-                distances, waypoints = vint_onnx.run(None, {
-                    "obs_img": batch_obs_imgs_np,
-                    "goal_img": batch_goal_data_np,
-                })
-                
+                distances, waypoints = trt_model.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np)
                 print(f"Inference time without torch {time.time() - time_0}")
                 # print("distances shape:", distances.shape, "len:", distances)
                 # print("waypoints shape:", waypoints.shape, "len:", waypoints)
