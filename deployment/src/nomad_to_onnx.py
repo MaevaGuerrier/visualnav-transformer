@@ -13,7 +13,6 @@ class NoisePredNetWrapper(nn.Module):
         self.noise_pred_net = nomad_model.noise_pred_net
 
     def forward(self, sample, timestep, global_cond):
-        # Call the underlying noise_pred_net directly with named arguments
         return self.noise_pred_net(
             sample=sample, timestep=timestep, global_cond=global_cond
         )
@@ -247,27 +246,13 @@ print("------------------------------- noise pred net --------------------------
 # (sample: torch.Tensor, timestep: Union[torch.Tensor, float, int], local_cond=None, global_cond=None, **kwargs)
 
 batch_size = 8
-
-# Create dummy inputs matching your model's expected input format
 sequence_length = 8
 input_dim = 2
 encoding_size = 256
 
-# Create dummy input tensor (batch_size, input_dim, sequence_length) on CUDA
 dummy_input = torch.randn(batch_size, sequence_length, input_dim).to(device)
-
-# Create dummy global condition (batch_size, encoding_size) on CUDA
 dummy_global_cond = torch.randn(batch_size, encoding_size).to(device)
-
-dummy_timestep = torch.randint(
-    low=0,
-    high=model_params["num_diffusion_iters"],
-    size=(batch_size,),  
-    dtype=torch.int64,
-).to(device)
-
-
-
+dummy_timestep = torch.tensor(0, dtype=torch.int64).to(device)
 
 # Test forward pass first to make sure it works
 print("Testing forward pass...")
@@ -284,7 +269,8 @@ with torch.no_grad():
 # Export to ONNX
 output_path = "nomad_noise_pred_net.onnx"
 
-# Create wrapper
+
+# Export to ONNX
 wrapper = NoisePredNetWrapper(model)
 wrapper = wrapper.to(device)
 wrapper.eval()
@@ -300,11 +286,11 @@ torch.onnx.export(
     input_names=["sample", "timestep", "global_cond"],
     output_names=["noise_pred"],
     dynamic_axes={
+        "sample": {0: "batch_size"},          
         "global_cond": {0: "batch_size"}, 
         "noise_pred": {0: "batch_size"}, 
     },
 )
-
 
 print("converting noise_pred_net to onnx")
 

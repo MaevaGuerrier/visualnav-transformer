@@ -288,26 +288,26 @@ def main(args: argparse.Namespace):
                     
                     for k in noise_scheduler.timesteps[:]:
                         # predict noise
-                        # k is torch
-                        # batch = naction_np.shape[0]
-                        # k_np = np.full((batch, 1), int(k), dtype=np.int64)
-                        k_np = np.repeat(int(k.item()), 8).astype(np.int64)
-                        # print(f"Shape obs_cond_np: {obs_cond_np.shape}, naction_np: {naction_np.shape}, k_np: {k_np.shape}")
-                        # This need to be: Shape obs_cond_np: (8, 256), naction_np: (8, 8, 2), k_np: (8,)
+                        k_np = np.array(k.cpu().item(), dtype=np.int64)
+                        print(f"Shape obs_cond_np: {obs_cond_np.shape}, naction_np: {naction_np.shape}, k_np: {k_np.shape}")
+                        print(f"Type obs_cond_np: {type(obs_cond_np)}, naction_np: {type(naction_np)}, k_np: {type(k_np)}")
+                        print("before ort sess noise pred")
                         ort_sess_noise_pred_inputs = {
                             "sample": naction_np,   
                             "timestep": k_np,
                             "global_cond": obs_cond_np,
                         }
                         noise_pred = ort_sess_noise_pred.run(None, ort_sess_noise_pred_inputs)[0]
+                        print("after ort sess noise pred")
                         # naction shape (8, 8, 2) type <class 'numpy.ndarray'>, noise_pred shape (8, 8, 2) type <class 'numpy.ndarray'>, k 9 type <class 'int'>
                         # inverse diffusion step (remove noise)
                         # DDPMScheduler need torch tensors (@TODO find a numpy implementation?)
                         noise_pred_torch = torch.from_numpy(noise_pred).float().to(device)
-                        naction_torch    = torch.from_numpy(naction_np).float().to(device)
-                        naction_np = noise_scheduler.step(
+                        naction_torch = torch.from_numpy(naction_np).float().to(device)
+                        print("before noise scheduler")
+                        naction_torch = noise_scheduler.step(
                             model_output=noise_pred_torch,
-                            timestep=int(k.item()),
+                            timestep=k,
                             sample=naction_torch
                         ).prev_sample
                         print(f"After noise scheduler")
