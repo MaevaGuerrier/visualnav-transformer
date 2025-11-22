@@ -6,6 +6,8 @@ import onnxruntime as ort
 import onnx
 import einops
 import torch.nn as nn
+import numpy as np
+
 
 class NoisePredNetWrapper(nn.Module):
     def __init__(self, nomad_model):
