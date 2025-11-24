@@ -56,7 +56,7 @@ dummy_goal = torch.randn(4, 3, 64, 85, device=device)
 dummy_obs = torch.randn(4, 18, 64, 85, device=device)
 
 
-output_path = "vint.onnx"
+output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/vint.onnx"
 
 print("Testing forward pass for vint ...")
 with torch.no_grad():

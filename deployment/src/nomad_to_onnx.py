@@ -97,7 +97,7 @@ vision_wrapper = vision_wrapper.to(device)
 vision_wrapper.eval()
 # model.eval()
 
-output_path = "nomad_vision_encoder.onnx"
+output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/nomad_vision_encoder.onnx"
 
 print("Testing forward pass for vision_encoder ...")
 with torch.no_grad():
@@ -182,7 +182,7 @@ dist_wrapper = DistPredWrapper(model)
 dist_wrapper = dist_wrapper.to(device)
 dist_wrapper.eval()
 
-output_path = "nomad_dist_pred_net.onnx"
+output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/nomad_dist_pred_net.onnx"
 
 print("Testing forward pass for dist pred encoder ...")
 with torch.no_grad():
@@ -269,7 +269,7 @@ with torch.no_grad():
 
 
 # Export to ONNX
-output_path = "nomad_noise_pred_net.onnx"
+output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/nomad_noise_pred_net.onnx"
 
 
 # Export to ONNX

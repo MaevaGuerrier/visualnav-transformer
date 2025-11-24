@@ -264,9 +264,9 @@ def load_model_onnx(model_name: str):
     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]  
 
     sess_options = ort.SessionOptions()
-    sess_options.log_severity_level = 0
+    sess_options.log_severity_level = 3
     ort_session = ort.InferenceSession(
-        f"{model_name}.onnx", sess_options, providers=providers
+        f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx", sess_options, providers=providers
     )
 
     return ort_session

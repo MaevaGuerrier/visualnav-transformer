@@ -47,7 +47,7 @@ MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"]
 VEL_TOPIC = robot_config["vel_navi_topic"]
 
-model_params = {"normalize": True, "context_size": 5, "image_size": [85, 64]}
+model_params = {"normalize": True, "context_size": 3, "image_size": [96, 96]}
 
 # GLOBALS
 context_queue = []
