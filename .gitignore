@@ -1,3 +1,11 @@
+# weights and model files
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.trt
+
+
 train/logs/*
 train/datasets/*
 train/vint_train/data/data_splits/*
