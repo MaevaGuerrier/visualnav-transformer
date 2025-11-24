@@ -8,10 +8,10 @@ import rospy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Joy
 
-IMAGE_TOPIC = "usb_cam/image_raw"#/oak/rgb/image_raw"#"/usb_cam/image_raw"
 TOPOMAP_IMAGES_DIR = "../topomaps/images"
 obs_img = None
 
+from topic_names import IMAGE_TOPIC
 
 def remove_files_in_dir(dir_path: str):
     for f in os.listdir(dir_path):
