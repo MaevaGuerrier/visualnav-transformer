@@ -365,7 +365,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="sim_test",
+        default="mist_office",
         type=str,
         help="path to topomap images",
     )
