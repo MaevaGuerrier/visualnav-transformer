@@ -9,7 +9,7 @@ import onnxruntime as ort
 import rospy
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
-from std_msgs.msg import Bool, Float32MultiArray, Int32
+from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
 from utils_onnx import msg_to_pil, transform_images, load_model_trt
 
@@ -104,6 +104,8 @@ def main(args: argparse.Namespace):
         "/topoplan/closest_node_img", Image, queue_size=1
     )
     closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
+    distances_pub = rospy.Publisher("/distances", Float32MultiArray, queue_size=1)
+    inference_pub = rospy.Publisher("/inference_time", Float32, queue_size=10)
 
     # navigation loop
     while not rospy.is_shutdown():
@@ -123,7 +125,7 @@ def main(args: argparse.Namespace):
 
                 crop = True
                 
-                time_0 = time.time()
+                start_time = time.time()
                 # Transform observation once
                 transf_obs_img = transform_images(
                     context_queue, model_params["image_size"], center_crop=crop
@@ -150,12 +152,21 @@ def main(args: argparse.Namespace):
                 # }
 
                 # ort_outputs = ort_session.run(None, ort_inputs)
-                # print(f"Inference time without torch {time.time() - time_0}")
+                # print(f"Inference time without torch {time.time() - start_time}")
                 
                 
                 # distances, waypoints = ort_outputs[0], ort_outputs[1]
                 distances, waypoints = trt_model.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np)
-                print(f"Inference time without torch {time.time() - time_0}")
+                
+                inference_time = time.time() - start_time
+                print(f"Inference time: {inference_time:.3f} seconds")
+                inference_time_msg = Float32()
+                inference_time_msg.data = inference_time
+                inference_pub.publish(inference_time_msg)
+
+                distances_msg = Float32MultiArray()
+                distances_msg.data = distances.flatten()
+                distances_pub.publish(distances_msg)
                 # print("distances shape:", distances.shape, "len:", distances)
                 # print("waypoints shape:", waypoints.shape, "len:", waypoints)
 
@@ -199,7 +210,10 @@ def main(args: argparse.Namespace):
                 # print("chosen wp", chosen_waypoint)
                 # print("min dist idx", min_dist_idx)
 
-                print("closest node", closest_node)
+                print("closest node:", closest_node)
+                closest_node_msg = Int32()
+                closest_node_msg.data = closest_node
+                closest_node_pub.publish(closest_node_msg)
 
                 # Publish visualization messages
                 # Waypoint

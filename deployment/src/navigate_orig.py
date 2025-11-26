@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import os
+from typing import Tuple, Sequence, Dict, Union, Optional, Callable
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,16 +9,13 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 import matplotlib.pyplot as plt
 import yaml
 
-import onnxruntime as ort
-import onnx
-
 # ROS
 import rospy
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
-from std_msgs.msg import Bool, Float32MultiArray, Int32
+from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
-from utils import msg_to_pil, to_numpy, transform_images, load_model
+from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
 
 from vint_train.training.train_utils import get_action
 import torch
@@ -126,15 +124,14 @@ def main(args: argparse.Namespace):
     path_viz_pub = rospy.Publisher(
         "viz_path", Path, queue_size=1)
     sampled_actions_pub = rospy.Publisher(SAMPLED_ACTIONS_TOPIC, Float32MultiArray, queue_size=1)
+    distances_pub = rospy.Publisher("/distances", Float32MultiArray, queue_size=1)
     goal_pub = rospy.Publisher("/topoplan/reached_goal", Bool, queue_size=1)
     goal_img_pub = rospy.Publisher("/topoplan/goal_img", Image, queue_size=1)
     subgoal_img_pub = rospy.Publisher("/topoplan/subgoal_img", Image, queue_size=1)
     closest_node_img_pub = rospy.Publisher("/topoplan/closest_node_img", Image, queue_size=1)
     closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
+    inference_pub = rospy.Publisher("/inference_time", Float32, queue_size=10)
 
-    # Try onnx vint
-    # providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    # ort_session = ort.InferenceSession('../model_weights/dist_pred_net.onnx', providers=providers)
 
     if model_params["model_type"] == "nomad":
         num_diffusion_iters = model_params["num_diffusion_iters"]
@@ -150,28 +147,35 @@ def main(args: argparse.Namespace):
         chosen_waypoint = np.zeros(4)
         if len(context_queue) > model_params["context_size"]:
             if model_params["model_type"] == "nomad":
+                start_time = time.time()
                 obs_images = transform_images(context_queue, model_params["image_size"], center_crop=False)
                 obs_images = torch.split(obs_images, 3, dim=1)
                 obs_images = torch.cat(obs_images, dim=1) 
                 obs_images = obs_images.to(device)
                 mask = torch.zeros(1).long().to(device)  
+                import pdb; pdb.set_trace()
 
                 start = max(closest_node - args.radius, 0)
                 end = min(closest_node + args.radius + 1, goal_node)
                 goal_image = [transform_images(g_img, model_params["image_size"], center_crop=False).to(device) for g_img in topomap[start:end + 1]]
                 goal_image = torch.concat(goal_image, dim=0)
+
                 obsgoal_cond = model('vision_encoder', obs_img=obs_images.repeat(len(goal_image), 1, 1, 1), goal_img=goal_image, input_goal_mask=mask.repeat(len(goal_image)))
+                
                 dists = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
                 dists = to_numpy(dists.flatten())
+                # print("distances:", dists)
+                distances_msg = Float32MultiArray()
+                distances_msg.data = dists
+                distances_pub.publish(distances_msg)
+
+
                 min_idx = np.argmin(dists)
                 closest_node = min_idx + start
                 print("closest node:", closest_node)
                 closest_node_msg = Int32()
                 closest_node_msg.data = closest_node
                 closest_node_pub.publish(closest_node_msg)
-
-                print(f"dtype obs images: {obs_images.dtype}, goal_image: {goal_image.dtype}")
-                print(f"len obs_image {len(obs_images)}, len goal_image {len(goal_image)}")
                 
                 sg_idx = min(min_idx + int(dists[min_idx] < args.close_threshold), len(obsgoal_cond) - 1)
                 obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
@@ -183,7 +187,6 @@ def main(args: argparse.Namespace):
                         obs_cond = obs_cond.repeat(args.num_samples, 1)
                     else:
                         obs_cond = obs_cond.repeat(args.num_samples, 1, 1)
-                    print(f"obs_cond shape for diffusion: {obs_cond.shape}")
                     
                     # initialize action from Gaussian noise
                     noisy_action = torch.randn(
@@ -193,20 +196,8 @@ def main(args: argparse.Namespace):
                     # init scheduler
                     noise_scheduler.set_timesteps(num_diffusion_iters)
 
-                    start_time = time.time()
-                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")    
                     
                     for k in noise_scheduler.timesteps[:]:
-                        print(f"Diffusion timestep: {k} type: {type(k)} torch type: {k.dtype} shape {k.shape}")
-                        # print type and shape of inputs
-                        print(f"SHAPES: obs_cond {obs_cond.shape}, naction {naction.shape}")
-                        print(f"DTYPES: obs_cond {obs_cond.dtype}, naction {naction.dtype}")
-                        print(f"timestep k: {k} type: {type(k)} torch type: {k.dtype} shape {k.shape}")
-
-                        # global_cond torch.Size([8, 256])
-                        # sample torch.Size([8, 8, 2])
-                        # timestep (1,)
-
                         # predict noise
                         noise_pred = model(
                             'noise_pred_net',
@@ -214,15 +205,18 @@ def main(args: argparse.Namespace):
                             timestep=k,
                             global_cond=obs_cond
                         )
-                        # print(f"SHAPES: naction {naction.shape}, noise_pred {noise_pred.shape}, timestep {k}, obs_cond {obs_cond.shape}")
-                        
                         # inverse diffusion step (remove noise)
                         naction = noise_scheduler.step(
                             model_output=noise_pred,
                             timestep=k,
                             sample=naction
                         ).prev_sample
-                    print("time elapsed:", time.time() - start_time)
+
+                    inference_time = time.time() - start_time
+                    print(f"Inference time: {inference_time:.3f} seconds")
+                    inference_time_msg = Float32()
+                    inference_time_msg.data = inference_time
+                    inference_pub.publish(inference_time_msg)
 
                 naction = to_numpy(get_action(naction))
                 sampled_actions_msg = Float32MultiArray()
@@ -232,57 +226,62 @@ def main(args: argparse.Namespace):
                 naction = naction[0] 
                 chosen_waypoint = naction[args.waypoint]
             else: # THIS IS NOT NOAMD SO VINT OR GNM ? Its seems its using subgoal (Vint paper talked about subgoal -> subgoal candidates)
+
                 start = max(closest_node - args.radius, 0)
                 end = min(closest_node + args.radius + 1, goal_node)
                 distances = []
                 waypoints = []
                 batch_obs_imgs = []
                 batch_goal_data = []
-
+                
                 crop=True
+                start_time = time.time()
                 for i, sg_img in enumerate(topomap[start: end + 1]):
                     transf_obs_img = transform_images(context_queue, model_params["image_size"], center_crop=crop)
                     goal_data = transform_images(sg_img, model_params["image_size"], center_crop=crop)
                     batch_obs_imgs.append(transf_obs_img)
                     batch_goal_data.append(goal_data)
-
-                    # batch_obs_imgs_np.append(to_numpy(transf_obs_img))
-                    # batch_goal_data_np.append(to_numpy(goal_data))
                     
-                # predict distances and waypoints
-                batch_obs_imgs_gpu = torch.cat(batch_obs_imgs, dim=0).to(device)
-                batch_goal_data_gpu = torch.cat(batch_goal_data, dim=0).to(device)
-                print("batch_obs_imgs shape:", batch_obs_imgs_gpu.shape)
-                print("batch_goal_data shape:", batch_goal_data_gpu.shape)
+                goal_img = transform_images(topomap[goal_node], model_params["image_size"], center_crop=crop, return_img=True)
+                goal_img_msg = pil_to_msg(goal_img)
+                goal_img_msg.header.stamp = rospy.Time.now()
+                goal_img_msg.header.frame_id = "base_footprint"
+                goal_img_msg.encoding = "rgb8"
+                goal_img_pub.publish(goal_img_msg)
 
-                time_0 = time.time()
-                distances, waypoints = model(batch_obs_imgs_gpu, batch_goal_data_gpu)
-                print(f'Inference time with torch {time.time() - time_0}')
+                subgoal_img = transform_images(topomap[end], model_params["image_size"], center_crop=crop, return_img=True)
+                subgoal_img_msg = pil_to_msg(subgoal_img)
+                subgoal_img_msg.header.stamp = rospy.Time.now()
+                subgoal_img_msg.header.frame_id = "base_footprint"
+                subgoal_img_msg.encoding = "rgb8"
+                subgoal_img_pub.publish(subgoal_img_msg)
+
+
+                closest_node_img = transform_images(topomap[closest_node], model_params["image_size"], center_crop=crop, return_img=True)
+                closest_node_img_msg = pil_to_msg(closest_node_img)
+                closest_node_img_msg.header.stamp = rospy.Time.now()
+                closest_node_img_msg.header.frame_id = "base_footprint"
+                closest_node_img_msg.encoding = "rgb8"
+                closest_node_img_pub.publish(closest_node_img_msg)
+
+                # predict distances and waypoints
+                batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(device)
+                batch_goal_data = torch.cat(batch_goal_data, dim=0).to(device)
+
+                distances, waypoints = model(batch_obs_imgs, batch_goal_data)
+                inference_time = time.time() - start_time
+                print(f"Inference time: {inference_time:.3f} seconds")
+                inference_time_msg = Float32()
+                inference_time_msg.data = inference_time
+                inference_pub.publish(inference_time_msg)
+
                 distances = to_numpy(distances)
                 waypoints = to_numpy(waypoints)
+                distances_msg = Float32MultiArray()
+                distances_msg.data = distances.flatten()
+                distances_pub.publish(distances_msg)
+
                 
-                # batch_obs_imgs_np = np.concatenate(batch_obs_imgs_np, axis=0)
-                # batch_goal_data_np = np.concatenate(batch_goal_data_np, axis=0)
-                # print("batch_obs_imgs shape:", batch_obs_imgs_np.shape)
-                # print("batch_goal_data shape:", batch_goal_data_np.shape)
-                # ort_inputs = {
-                #     "obs": batch_obs_imgs_np,
-                #     "goal": batch_goal_data_np,
-                # }
-                # time_0 = time.time()
-                # ort_outputs = ort_session.run(None, ort_inputs)
-                # print(f'Inference time without torch {time.time() - time_0}')
-                # print("Available providers:", ort.get_available_providers())
-                # print("Session providers:", ort_session.get_providers())
-
-
-                # max_diff_model = abs(distances - ort_outputs[0]).max()
-                # print(
-                #     f"Maximum difference between PyTorch and ONNX: {max_diff_model}"
-                # )
-
-                # print("distances shape:", distances.shape, "len:", distances)
-                # print("waypoints shape:", waypoints.shape, "len:", waypoints)
 
                 # look for closest node
                 min_dist_idx = np.argmin(distances)
@@ -299,9 +298,12 @@ def main(args: argparse.Namespace):
                     print("closest start", start, "min_dist_idx + 1", min_dist_idx + 1, "goal_node", goal_node)
                     closest_node = min(start + min_dist_idx + 1, goal_node)
                 # print("chosen wp", chosen_waypoint)
-                print("min dist idx", min_dist_idx)
+                # print("min dist idx", min_dist_idx)
 
-                print("closest node", closest_node)
+                print("closest node:", closest_node)
+                closest_node_msg = Int32()
+                closest_node_msg.data = closest_node
+                closest_node_pub.publish(closest_node_msg)
 
                 # print(f"end {end} start {start}")
                 # Publish visualization messages
@@ -326,8 +328,7 @@ def main(args: argparse.Namespace):
                     path_msg_viz.poses.append(PoseStamped(
                         pose=Pose(position=Point(x=wp[0], y=wp[1]))))
                 path_viz_pub.publish(path_msg_viz)
-                # for dist in distances:
-                    # print("distance:", dist)
+                
 
         # RECOVERY MODE
         if model_params["normalize"]:
@@ -364,7 +365,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="sim_test",
+        default="bunker_mist_office_17nov_sunFlare_physic",
         type=str,
         help="path to topomap images",
     )
@@ -387,7 +388,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--radius",
         "-r",
-        default=2,
+        default=10,
         type=int,
         help="""temporal number of locobal nodes to look at in the topopmap for
         localization (default: 2)""",
