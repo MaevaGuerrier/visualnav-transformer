@@ -213,6 +213,7 @@ def main(args: argparse.Namespace):
                         ).prev_sample
 
                     inference_time = time.time() - start_time
+                    
                     print(f"Inference time: {inference_time:.3f} seconds")
                     inference_time_msg = Float32()
                     inference_time_msg.data = inference_time
@@ -270,6 +271,7 @@ def main(args: argparse.Namespace):
 
                 distances, waypoints = model(batch_obs_imgs, batch_goal_data)
                 inference_time = time.time() - start_time
+                
                 print(f"Inference time: {inference_time:.3f} seconds")
                 inference_time_msg = Float32()
                 inference_time_msg.data = inference_time
@@ -350,7 +352,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        default="nomad",
+        default="gnm",
         type=str,
         help="model name (only nomad is supported) (hint: check ../config/models.yaml) (default: nomad)",
     )
@@ -365,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="bunker_mist_office_17nov_sunFlare_physic",
+        default="mist_office",
         type=str,
         help="path to topomap images",
     )
