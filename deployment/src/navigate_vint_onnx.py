@@ -235,7 +235,7 @@ def main(args: argparse.Namespace):
 
                 # Path
                 path_msg_viz = Path()
-                path_msg_viz.header.frame_id = "base_footprint"
+                path_msg_viz.header.frame_id = "base_link"
                 path_msg_viz.header.stamp = rospy.Time.now()
                 # print("------")
                 for wp in waypoints[min_dist_idx]:
