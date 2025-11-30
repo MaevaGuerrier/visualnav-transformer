@@ -283,7 +283,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="mist_office",
+        default="reference_bunker_mist_office_sharp_reference_trial_1",
         type=str,
         help="path to topomap images",
     )
