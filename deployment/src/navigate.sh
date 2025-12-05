@@ -40,7 +40,7 @@ tmux send-keys "python3 navigate_${1}.py ${@:2}" Enter
 
 
 tmux select-pane -t $SESSION:0.1
-tmux send-keys "" Enter # python3 pd_controller.py
+tmux send-keys "python3 pd_controller.py" Enter 
 
 
 tmux select-pane -t $SESSION:0.2
