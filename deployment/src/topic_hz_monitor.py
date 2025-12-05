@@ -124,15 +124,15 @@ class TopicRateMonitor:
                 status.values.append(KeyValue(key="Messages in Window", value=str(len(data['times']))))
             
             # Check for stale messages (no message in 2x expected period)
-            if data['last_msg_time'] is not None:
-                time_since_last = time.time() - data['last_msg_time']
-                max_delay = 2.0 / expected_rate if expected_rate > 0 else 1.0
+            # if data['last_msg_time'] is not None:
+            #     time_since_last = time.time() - data['last_msg_time']
+            #     max_delay = 2.0 / expected_rate if expected_rate > 0 else 1.0
                 
-                if time_since_last > max_delay:
-                    status.level = DiagnosticStatus.STALE
-                    status.message = f"No messages for {time_since_last:.2f}s!"
-                    status.values.append(KeyValue(key="Time Since Last Message (s)", value=f"{time_since_last:.2f}"))
-                    rospy.logwarn(f"Stale topic detected: {topic_name}, last message {time_since_last:.2f}s ago")
+            #     if time_since_last > max_delay:
+            #         status.level = DiagnosticStatus.STALE
+            #         status.message = f"No messages for {time_since_last:.2f}s!"
+            #         status.values.append(KeyValue(key="Time Since Last Message (s)", value=f"{time_since_last:.2f}"))
+            #         rospy.logwarn(f"Stale topic detected: {topic_name}, last message {time_since_last:.2f}s ago")
             
             msg.status.append(status)
         

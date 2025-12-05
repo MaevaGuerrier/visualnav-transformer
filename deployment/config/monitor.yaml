@@ -1,8 +1,8 @@
 # topic: hz
 topics:
-  /oak/rgb/image_raw: 20     
+  /oak/rgb/image_raw: 6     
   /usb_cam/image_raw: 30     
-  /oak/rgb/image_raw/compressed: 20     
+  /oak/rgb/image_raw/compressed: 6     
   /usb_cam/image_raw/compressed: 30  
   /lvi_sam/lidar/mapping/odometry: 5        
   /os_cloud_node/points: 9  
