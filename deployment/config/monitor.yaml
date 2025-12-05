@@ -1,0 +1,12 @@
+# topic: hz
+topics:
+  /oak/rgb/image_raw: 20     
+  /usb_cam/image_raw: 30     
+  /oak/rgb/image_raw/compressed: 20     
+  /usb_cam/image_raw/compressed: 30  
+  /lvi_sam/lidar/mapping/odometry: 50        
+  /os_cloud_node/points: 10  
+  /waypoint: -1 # will be override by cmd_vel         
+
+# IMPORTANT
+# cmd_vel comes frome robot.yaml
