@@ -95,6 +95,7 @@ class TopicRateMonitor:
                 status.message = "Waiting for messages..."
                 status.values.append(KeyValue(key="Expected Rate (Hz)", value=str(expected_rate)))
                 status.values.append(KeyValue(key="Current Rate (Hz)", value="N/A"))
+                rospy.logwarn(f"No messages received yet on topic: {topic_name}")
             else:
                 # Check if rate is within tolerance
                 min_rate = expected_rate * (1 - self.rate_tolerance)
@@ -104,13 +105,16 @@ class TopicRateMonitor:
                 
                 if current_rate < min_rate:
                     status.level = DiagnosticStatus.ERROR
-                    status.message = f"Rate too low! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
+                    status.message = f"{topic_name} Rate too low! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
+                    rospy.logwarn(status.message)
                 elif current_rate > max_rate:
                     status.level = DiagnosticStatus.WARN
-                    status.message = f"Rate too high: {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
+                    status.message = f"{topic_name} Rate too high! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
+                    rospy.logwarn(status.message)
                 else:
                     status.level = DiagnosticStatus.OK
                     status.message = f"Rate OK: {current_rate:.2f} Hz"
+
                 
                 status.values.append(KeyValue(key="Expected Rate (Hz)", value=str(expected_rate)))
                 status.values.append(KeyValue(key="Current Rate (Hz)", value=f"{current_rate:.2f}"))
@@ -128,6 +132,7 @@ class TopicRateMonitor:
                     status.level = DiagnosticStatus.STALE
                     status.message = f"No messages for {time_since_last:.2f}s!"
                     status.values.append(KeyValue(key="Time Since Last Message (s)", value=f"{time_since_last:.2f}"))
+                    rospy.logwarn(f"Stale topic detected: {topic_name}, last message {time_since_last:.2f}s ago")
             
             msg.status.append(status)
         

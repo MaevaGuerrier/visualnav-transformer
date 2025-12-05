@@ -4,8 +4,8 @@ topics:
   /usb_cam/image_raw: 30     
   /oak/rgb/image_raw/compressed: 20     
   /usb_cam/image_raw/compressed: 30  
-  /lvi_sam/lidar/mapping/odometry: 50        
-  /os_cloud_node/points: 10  
+  /lvi_sam/lidar/mapping/odometry: 5        
+  /os_cloud_node/points: 9  
   /waypoint: -1 # will be override by cmd_vel         
 
 # IMPORTANT
