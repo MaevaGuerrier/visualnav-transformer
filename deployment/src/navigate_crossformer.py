@@ -14,7 +14,6 @@ import robo_gym
 import yaml
 from PIL import Image as PILImage
 
-from pd_controller import PDController
 import onnxruntime as ort
 
 # from utils import pil_to_numpy_array
@@ -22,6 +21,12 @@ import jax
 import numpy as np
 from crossformer.model.crossformer_model import CrossFormerModel
 from utils_onnx import transform_images, transform_numpy_images
+
+
+# UTILS
+from topic_names import (IMAGE_TOPIC,
+                        WAYPOINT_TOPIC,
+                        SAMPLED_ACTIONS_TOPIC)
 
 
 def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
@@ -60,22 +65,29 @@ def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarr
     return img_array
 
 
-class TopomapNavigationController:
+class TopomapNavigationController(Node):
     """Navigation controller using topological maps."""
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # print(f"Using device: {self.device}")
-
         self.robot_config = self._load_config("../config/robot.yaml")
         # self.model_configs = self._load_config("../config/models.yaml")
-
         self.max_v = self.robot_config["max_v"]
         self.max_w = self.robot_config["max_w"]
         self.rate = self.robot_config["frame_rate"]
 
-        self.controller = PDController()
+        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 1)
+        self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
+        self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
+        self.sampled_actions_pub = self.create_publisher(
+            Float32MultiArray, SAMPLED_ACTIONS_TOPIC, 1
+        )
+        self.goal_pub_img = self.create_publisher(Image, "/topoplan/goal_img", 1)
+
+        self.create_timer(1.0 / self.rate, self.run)
+
         self.model = None
         self.task = None
         self.noise_scheduler = None
@@ -105,7 +117,6 @@ class TopomapNavigationController:
 
         self.reached_goal = False
 
-        self._setup_environment()
         self._setup_model()
         self._load_topomap()
 
@@ -114,17 +125,6 @@ class TopomapNavigationController:
         with open(config_path, "r") as f:
             return yaml.safe_load(f)
 
-    def _setup_environment(self):
-        """Initialize the robo-gym environment."""
-        self.env = gym.make(
-            "LimoSRob-v0",
-            rs_address="127.0.0.1:50051",
-            gui=True,
-            robot_model=self.robot_model,
-            with_camera=True,
-        )
-
-        obs, _ = self.env.reset()
 
     def _setup_model(self):
         self.model = CrossFormerModel.load_pretrained_("hf://rail-berkeley/crossformer")
@@ -164,75 +164,67 @@ class TopomapNavigationController:
 
         # print(f"Goal node: {self.goal_node}")
 
-    def _update_context_queue(self, new_image):
-        # time_stamp = time.time()
-        # debug_img = PILImage.fromarray(new_image)
-        # debug_img_dir = f"../debug/"
-        # if not os.path.exists(debug_img_dir):
-        #     os.makedirs(debug_img_dir)
 
-        # debug_img.save(os.path.join(debug_img_dir, f"img_{time_stamp}.png"))
-
-        """Update the context queue with a new observation."""
+    def _image_cb(self, msg: Image):
         if len(self.context_queue) < self.context_size + 1:
-            self.context_queue.append(new_image)
+             self.context_queue.append(msg_to_pil(msg))
         else:
             self.context_queue.pop(0)
-            self.context_queue.append(new_image)
+             self.context_queue.append(msg_to_pil(msg))
 
     def _predict_actions(self) -> np.ndarray:
         # print("before pil numpy array")
         # print("here")
-        start_time = time.time()
+        # start_time = time.time()
 
-        start = max(self.closest_node - self.args.radius, 0)
-        end = min(self.closest_node + self.args.radius + 1, self.goal_node)
-        # import pdb; pdb.set_trace()
-        crop = True
-        # Transform observation once
-        # context_queue = [PILImage.fromarray(img.astype("uint8")) for img in self.context_queue]
-        transf_obs_img = transform_numpy_images(
-            self.context_queue, self.dist_model_params["image_size"], center_crop=crop
-        )
+        # start = max(self.closest_node - self.args.radius, 0)
+        # end = min(self.closest_node + self.args.radius + 1, self.goal_node)
+        # # import pdb; pdb.set_trace()
+        # crop = True
+        # # Transform observation once
+        # # context_queue = [PILImage.fromarray(img.astype("uint8")) for img in self.context_queue]
+        # transf_obs_img = transform_numpy_images(
+        #     self.context_queue, self.dist_model_params["image_size"], center_crop=crop
+        # )
 
-        # Vectorized goal processing
-        goal_imgs = self.topomap[start : end + 1]
-        batch_goal_data_np = np.concatenate(
-            [
-                transform_images(
-                    sg_img, self.dist_model_params["image_size"], center_crop=crop
-                )
-                for sg_img in goal_imgs
-            ],
-            axis=0,
-        ).astype("float32")
+        # # Vectorized goal processing
+        # goal_imgs = self.topomap[start : end + 1]
+        # batch_goal_data_np = np.concatenate(
+        #     [
+        #         transform_images(
+        #             sg_img, self.dist_model_params["image_size"], center_crop=crop
+        #         )
+        #         for sg_img in goal_imgs
+        #     ],
+        #     axis=0,
+        # ).astype("float32")
 
-        # Repeat observation for batch
-        num_goals = len(goal_imgs)
-        batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype(
-            "float32"
-        )
+        # # Repeat observation for batch
+        # num_goals = len(goal_imgs)
+        # batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype(
+        #     "float32"
+        # )
 
-        ort_inputs = {
-            "obs": batch_obs_imgs_np,
-            "goal": batch_goal_data_np,
-        }
-        distances = self.dist_pred_network.run(None, ort_inputs)[0]
-        # import pdb; pdb.set_trace()
-        # print(f"Inference time without torch {time.time() - time_0}")
+        # ort_inputs = {
+        #     "obs": batch_obs_imgs_np,
+        #     "goal": batch_goal_data_np,
+        # }
+        # distances = self.dist_pred_network.run(None, ort_inputs)[0]
+        # # import pdb; pdb.set_trace()
+        # # print(f"Inference time without torch {time.time() - time_0}")
 
-        min_dist_idx = np.argmin(distances)
-        self.closest_node = start + min_dist_idx
+        # min_dist_idx = np.argmin(distances)
+        # self.closest_node = start + min_dist_idx
 
         # if distances[min_dist_idx] > self.args.close_threshold:
         #     sg_idx = self.closest_node
         # else:
         #     sg_idx = min(self.closest_node + 1, self.goal_node)
-        sg_idx = min(self.closest_node + 1, self.goal_node)
+        # sg_idx = min(self.closest_node + 1, self.goal_node)
 
-        print("closest node", self.closest_node)
-        print("goal node", sg_idx)
-        target_goal_image = self.topomap[sg_idx]
+        # print("closest node", self.closest_node)
+        # print("goal node", sg_idx)
+        target_goal_image = self.topomap[self.goal_node] #self.topomap[sg_idx]
 
         goal_img_np = pil_to_numpy_array(target_goal_image, target_size=(224, 224))
 
@@ -301,12 +293,6 @@ class TopomapNavigationController:
 
         return img_stack, timestep_mask
 
-    def _get_base_velocity_command(self, waypoint: np.ndarray) -> List[float]:
-        """Convert waypoint to base velocity command."""
-        if self.normalize:
-            waypoint[:2] *= self.max_v / self.rate
-        return self.controller.get_velocity(waypoint)
-
     def run(self):
         """Main navigation loop."""
         # print("Starting topological navigation...")
@@ -314,14 +300,10 @@ class TopomapNavigationController:
 
         try:
             while not self.reached_goal:
-                obs, _, _, _, _ = self.env.step([0, 0])
-                current_image = obs["camera"]
-
-                self._update_context_queue(current_image)
-
-                chosen_waypoint = np.zeros(4)
 
                 if len(self.context_queue) > self.context_size:
+
+                    chosen_waypoint = np.zeros(4)
 
                     predicted_actions = self._predict_actions()
                     chosen_waypoint = predicted_actions[0][0]
@@ -329,19 +311,18 @@ class TopomapNavigationController:
                     if len(chosen_waypoint) == 2:
                         chosen_waypoint = np.pad(chosen_waypoint, (0, 2), "constant")
 
-                base_velocity_command = self._get_base_velocity_command(chosen_waypoint)
 
-                action = base_velocity_command
-                # print(f"Executing action: {action}")
-                obs, _, _, _, _ = self.env.step(action)
+                waypoint_msg = Float32MultiArray()
+                waypoint_msg.data = chosen_waypoint.tolist()
+                self.waypoint_pub.publish(waypoint_msg)
 
                 print(f"Closest node: {self.closest_node}")
                 self.reached_goal = self.closest_node == self.goal_node
+                self.goal_pub.publish(Bool(data=self.reached_goal))
                 if self.reached_goal:
                     print("Goal reached!")
                     break
 
-                time.sleep(0.1)
 
         except KeyboardInterrupt:
             print("\nNavigation stopped by user")
@@ -402,9 +383,15 @@ def main():
     )
     args = parser.parse_args()
 
-    navigator = TopomapNavigationController(args)
-    navigator.run()
-
+    rclpy.init()
+    node = TopomapNavigationController(args)
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()
