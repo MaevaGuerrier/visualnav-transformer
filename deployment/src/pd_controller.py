@@ -25,7 +25,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, Bool
 
-from utils import clip_angle  # assumes utils.py provides this helper
+
 
 from topic_names import (WAYPOINT_TOPIC, 
 			 			REACHED_GOAL_TOPIC)
@@ -42,7 +42,8 @@ EPS = 1e-8
 WAYPOINT_TIMEOUT = 1 # 1 # seconds # TODO: tune this
 FLIP_ANG_VEL = np.pi/4
 
-
+MAX_TIME: float = 30000.0
+DISTANCE_REPORT_INTERVAL: float = 0.1
 
 class PDControllerNode(Node):
 
@@ -91,6 +92,11 @@ class PDControllerNode(Node):
             and (time.time() - self._last_wp_time) < WAYPOINT_TIMEOUT
         )
 
+
+    def _clip_angle(self, angle):
+        return np.mod(angle + np.pi, 2 * np.pi) - np.pi
+
+
     def _pd_controller(self, waypoint: np.ndarray) -> Tuple[float]:
         """PD controller for the robot"""
         assert len(waypoint) == 2 or len(waypoint) == 4, "waypoint must be a 2D or 4D vector"
@@ -101,7 +107,7 @@ class PDControllerNode(Node):
         # this controller only uses the predicted heading if dx and dy near zero
         if len(waypoint) == 4 and np.abs(dx) < EPS and np.abs(dy) < EPS:
             v = 0
-            w = clip_angle(np.arctan2(hy, hx))/DT		
+            w = self._clip_angle(np.arctan2(hy, hx))/DT		
         elif np.abs(dx) < EPS:
             v =  0
             w = np.sign(dy) * np.pi/(2*DT)

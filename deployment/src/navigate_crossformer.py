@@ -5,22 +5,20 @@ import os
 import time
 from typing import List
 
-import gymnasium as gym
 import numpy as np
-import robo_gym
 
 # import torch
 # import torch.nn as nn
 import yaml
 from PIL import Image as PILImage
 
-import onnxruntime as ort
+# import onnxruntime as ort
 
 # from utils import pil_to_numpy_array
 import jax
 import numpy as np
 from crossformer.model.crossformer_model import CrossFormerModel
-from utils_onnx import transform_images, transform_numpy_images
+# from utils_onnx import transform_images, transform_numpy_images
 
 
 # UTILS
@@ -167,10 +165,10 @@ class TopomapNavigationController(Node):
 
     def _image_cb(self, msg: Image):
         if len(self.context_queue) < self.context_size + 1:
-             self.context_queue.append(msg_to_pil(msg))
+            self.context_queue.append(msg_to_pil(msg))
         else:
             self.context_queue.pop(0)
-             self.context_queue.append(msg_to_pil(msg))
+            self.context_queue.append(msg_to_pil(msg))
 
     def _predict_actions(self) -> np.ndarray:
         # print("before pil numpy array")
@@ -352,7 +350,7 @@ def main():
     parser.add_argument(
         "--dir",
         "-d",
-        default="sim_test",
+        default="test",
         type=str,
         help="Path to topomap images directory (default: topomap)",
     )
@@ -373,9 +371,9 @@ def main():
     parser.add_argument(
         "--radius",
         "-r",
-        default=4,
+        default=2,
         type=int,
-        help="Number of local nodes to consider (default: 4)",
+        help="Number of local nodes to consider (default: 2)",
     )
 
     parser.add_argument(

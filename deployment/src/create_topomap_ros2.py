@@ -1,16 +1,17 @@
 import argparse
 import os
 import shutil
-from utils import msg_to_pil 
 import time
+
+import numpy as np 
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Joy
-
-IMAGE_TOPIC = "/camera1/image_raw"
+from PIL import Image as PILImage
+from topic_names import IMAGE_TOPIC
 TOPOMAP_IMAGES_DIR = "../topomaps/images"
 
 class TopomapCreator(Node):
@@ -72,8 +73,15 @@ class TopomapCreator(Node):
             except Exception as e:
                 self.get_logger().error("Failed to delete %s. Reason: %s" % (file_path, e))
 
+    def msg_to_pil(self, msg: Image) -> PILImage.Image:
+        img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+            msg.height, msg.width, -1)
+        pil_image = PILImage.fromarray(img)
+        return pil_image
+
+
     def callback_obs(self, msg: Image):
-        self.obs_img = msg_to_pil(msg)
+        self.obs_img = self.msg_to_pil(msg)
 
     def callback_joy(self, msg: Joy):
         if msg.buttons[0]:
