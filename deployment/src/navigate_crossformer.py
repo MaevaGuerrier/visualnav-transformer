@@ -4,27 +4,37 @@ import argparse
 import os
 import time
 from typing import List
-
+import rclpy
+from rclpy.node import Node
 import numpy as np
 
 # import torch
 # import torch.nn as nn
 import yaml
 from PIL import Image as PILImage
-
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32MultiArray, Bool
 # import onnxruntime as ort
 
 # from utils import pil_to_numpy_array
 import jax
 import numpy as np
 from crossformer.model.crossformer_model import CrossFormerModel
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 # from utils_onnx import transform_images, transform_numpy_images
-
+from sensor_msgs.msg import Image
 
 # UTILS
 from topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
                         SAMPLED_ACTIONS_TOPIC)
+
+
+def msg_to_pil(msg: Image) -> PILImage.Image:
+    img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+        msg.height, msg.width, -1)
+    pil_image = PILImage.fromarray(img)
+    return pil_image
 
 
 def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
@@ -67,6 +77,7 @@ class TopomapNavigationController(Node):
     """Navigation controller using topological maps."""
 
     def __init__(self, args: argparse.Namespace):
+        super().__init__('topomap_navigation_controller')
         self.args = args
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # print(f"Using device: {self.device}")
@@ -75,8 +86,21 @@ class TopomapNavigationController(Node):
         self.max_v = self.robot_config["max_v"]
         self.max_w = self.robot_config["max_w"]
         self.rate = self.robot_config["frame_rate"]
-
-        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 1)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            durability=DurabilityPolicy.VOLATILE
+        )
+        
+        # Create subscription
+        # print(IMAGE_TOPIC)
+        self.subscription = self.create_subscription(
+            Image,
+            IMAGE_TOPIC,  # Replace with your actual topic name
+            self._image_cb,
+            qos_profile
+        )
         self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
         self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
         self.sampled_actions_pub = self.create_publisher(
@@ -96,13 +120,13 @@ class TopomapNavigationController(Node):
 
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
-        sess_options = ort.SessionOptions()
-        sess_options.log_severity_level = 3
-        ort_session = ort.InferenceSession(
-            "dist_pred_net.onnx", sess_options, providers=providers
-        )
+        # sess_options = ort.SessionOptions()
+        # sess_options.log_severity_level = 3
+        # ort_session = ort.InferenceSession(
+        #     "dist_pred_net.onnx", sess_options, providers=providers
+        # )
 
-        self.dist_pred_network = ort_session
+        # self.dist_pred_network = ort_session
         self.dist_model_params = {
             "normalize": True,
             "context_size": 5,
@@ -127,9 +151,9 @@ class TopomapNavigationController(Node):
     def _setup_model(self):
         self.model = CrossFormerModel.load_pretrained_("hf://rail-berkeley/crossformer")
         print("loaded crossformer")
-        # self.model = CrossFormerModel.load_pretrained(
-        #     "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
-        # )
+        # # self.model = CrossFormerModel.load_pretrained_local(
+        # #     "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
+        # # )
         self.unnormalization_statistics = dict(
             (stat_name, stat_value[:4, ...])
             for (stat_name, stat_value) in self.model.dataset_statistics[
@@ -164,6 +188,7 @@ class TopomapNavigationController(Node):
 
 
     def _image_cb(self, msg: Image):
+        # self.get_logger().info(f'Received image: {msg.width}x{msg.height}')
         if len(self.context_queue) < self.context_size + 1:
             self.context_queue.append(msg_to_pil(msg))
         else:
@@ -248,8 +273,8 @@ class TopomapNavigationController(Node):
         # if goal_idx > self.closest_node:
         #     self.closest_node = goal_idx
 
-        inference_time = time.time() - start_time
-        print(f"inference time: {inference_time:.3f}s")
+        # inference_time = time.time() - start_time
+        # print(f"inference time: {inference_time:.3f}s")
 
         return action
 
@@ -297,10 +322,10 @@ class TopomapNavigationController(Node):
         # print(f"Goal: reach node {self.goal_node}")
 
         try:
-            while not self.reached_goal:
+            # while not self.reached_goal:
 
                 if len(self.context_queue) > self.context_size:
-
+                    print("Predicting action...")
                     chosen_waypoint = np.zeros(4)
 
                     predicted_actions = self._predict_actions()
@@ -310,16 +335,16 @@ class TopomapNavigationController(Node):
                         chosen_waypoint = np.pad(chosen_waypoint, (0, 2), "constant")
 
 
-                waypoint_msg = Float32MultiArray()
-                waypoint_msg.data = chosen_waypoint.tolist()
-                self.waypoint_pub.publish(waypoint_msg)
+                    waypoint_msg = Float32MultiArray()
+                    waypoint_msg.data = chosen_waypoint.tolist()
+                    self.waypoint_pub.publish(waypoint_msg)
 
-                print(f"Closest node: {self.closest_node}")
+                # print(f"Closest node: {self.closest_node}")
                 self.reached_goal = self.closest_node == self.goal_node
                 self.goal_pub.publish(Bool(data=self.reached_goal))
                 if self.reached_goal:
                     print("Goal reached!")
-                    break
+                    # break
 
 
         except KeyboardInterrupt:
@@ -382,13 +407,15 @@ def main():
     args = parser.parse_args()
 
     rclpy.init()
-    node = TopomapNavigationController(args)
+    print("Node starting...")
+    tnc = TopomapNavigationController(args)
+    print("Starting spin...")
     try:
-        rclpy.spin(node)
+        rclpy.spin(tnc)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        tnc.destroy_node()
         rclpy.shutdown()
 
 if __name__ == "__main__":
