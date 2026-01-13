@@ -7,6 +7,7 @@ from typing import List
 import rclpy
 from rclpy.node import Node
 import numpy as np
+import time
 
 # import torch
 # import torch.nn as nn
@@ -149,7 +150,7 @@ class TopomapNavigationController(Node):
 
 
     def _setup_model(self):
-        self.model = CrossFormerModel.load_pretrained_("hf://rail-berkeley/crossformer")
+        self.model = CrossFormerModel.load_pretrained("hf://rail-berkeley/crossformer")
         print("loaded crossformer")
         # # self.model = CrossFormerModel.load_pretrained_local(
         # #     "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
@@ -254,6 +255,7 @@ class TopomapNavigationController(Node):
         goal_img_np = goal_img_np[None, ...]
         task = self.model.create_tasks(goals={"image_nav": goal_img_np})
         # print("after task")
+        start_time = time.time()
         observation = self._prepare_crossformer_observation()
         self.rng_key, subkey = jax.random.split(self.rng_key)
         # print("after observation")
@@ -265,6 +267,8 @@ class TopomapNavigationController(Node):
             rng=subkey,
             unnormalization_statistics=self.unnormalization_statistics,
         )
+        inference_time = time.time() - start_time
+        print(f"Inference time: {inference_time:.3f} seconds")
         # print("after model prediction")
         action = np.array(action, dtype=np.float64)
 
@@ -325,7 +329,7 @@ class TopomapNavigationController(Node):
             # while not self.reached_goal:
 
                 if len(self.context_queue) > self.context_size:
-                    print("Predicting action...")
+                    # print("Predicting action...")
                     chosen_waypoint = np.zeros(4)
 
                     predicted_actions = self._predict_actions()
@@ -339,7 +343,7 @@ class TopomapNavigationController(Node):
                     waypoint_msg.data = chosen_waypoint.tolist()
                     self.waypoint_pub.publish(waypoint_msg)
 
-                # print(f"Closest node: {self.closest_node}")
+                print(f"Closest node: {self.closest_node}")
                 self.reached_goal = self.closest_node == self.goal_node
                 self.goal_pub.publish(Bool(data=self.reached_goal))
                 if self.reached_goal:
@@ -375,7 +379,7 @@ def main():
     parser.add_argument(
         "--dir",
         "-d",
-        default="test",
+        default="mist_office",
         type=str,
         help="Path to topomap images directory (default: topomap)",
     )
