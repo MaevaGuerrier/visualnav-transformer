@@ -16,7 +16,7 @@ img_topic=`sed -n 's/^IMAGE_TOPIC *= *"\(.*\)"/\1/p' topic_names.py`
 # pip install -e train/
 
 # Change back the directory to the working dir with the navigate.py script
-cd /workspace/src/visualnav-transformer/deployment/src
+cd /workspace/src/visualnav-transformer/deployment/src/ros1
 
 
 SESSION=navigate_bunker

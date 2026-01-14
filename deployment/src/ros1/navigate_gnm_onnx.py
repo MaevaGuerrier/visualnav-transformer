@@ -11,7 +11,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
-from utils_onnx import msg_to_pil, transform_images, load_model_onnx
+from src.utils_onnx import msg_to_pil, transform_images, load_model_onnx
 
 # from vint_train.training.train_utils import get_action
 # import torch
@@ -22,7 +22,7 @@ import yaml
 import time
 
 # UTILS
-from topic_names import (
+from src.topic_names import (
     IMAGE_TOPIC,
     WAYPOINT_TOPIC,
     SAMPLED_ACTIONS_TOPIC,
@@ -31,14 +31,18 @@ from topic_names import (
 
 
 # CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-ROBOT_CONFIG_PATH = "../config/robot.yaml"
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+TOPOMAP_IMAGES_DIR = f"{WORK_DIR}topomaps/images"
+MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
+ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
+MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
-RATE = robot_config["frame_rate"]
+RATE = robot_config["frame_rate"] 
 VEL_TOPIC = robot_config["vel_navi_topic"]
+
 
 model_params = {"normalize": True, "context_size": 5, "image_size": [85, 64]}
 
@@ -65,7 +69,7 @@ def callback_obs(msg):
 def main(args: argparse.Namespace):
     global context_size
 
-    vint_onnx = load_model_onnx("vint")
+    gnm_onnx = load_model_onnx("gnm")
     print("loaded model")
     # load topomap
     topomap_filenames = sorted(
@@ -158,7 +162,7 @@ def main(args: argparse.Namespace):
                 # distances, waypoints = ort_outputs[0], ort_outputs[1]
 
 
-                distances, waypoints = vint_onnx.run(None, {
+                distances, waypoints = gnm_onnx.run(None, {
                     "obs_img": batch_obs_imgs_np,
                     "goal_img": batch_goal_data_np,
                 })
@@ -235,7 +239,7 @@ def main(args: argparse.Namespace):
 
                 # Path
                 path_msg_viz = Path()
-                path_msg_viz.header.frame_id = "base_link"
+                path_msg_viz.header.frame_id = "base_footprint"
                 path_msg_viz.header.stamp = rospy.Time.now()
                 # print("------")
                 for wp in waypoints[min_dist_idx]:
@@ -268,9 +272,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        default="vint",
+        default="gnm",
         type=str,
-        help="model name (only vint is supported) (hint: check ../config/models.yaml) (default: vint)",
+        help="model name (only gnm is supported) (hint: check ../config/models.yaml) (default: gnm)",
     )
     parser.add_argument(
         "--waypoint",
@@ -283,7 +287,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="reference_bunker_mist_office_sharp_reference_trial_1",
+        default="mist_office",
         type=str,
         help="path to topomap images",
     )

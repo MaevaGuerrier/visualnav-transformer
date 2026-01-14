@@ -1,6 +1,6 @@
 import argparse
 import os
-from utils import msg_to_pil 
+from src.utils import msg_to_pil 
 import time
 
 # ROS
@@ -8,10 +8,10 @@ import rospy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Joy
 
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
+TOPOMAP_IMAGES_DIR = "../../topomaps/images"
 obs_img = None
 
-from topic_names import IMAGE_TOPIC
+from src.topic_names import IMAGE_TOPIC
 
 def remove_files_in_dir(dir_path: str):
     for f in os.listdir(dir_path):
