@@ -1,5 +1,5 @@
 # ROS
-# from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image
 
 # pytorch
 # import torch
@@ -11,12 +11,11 @@ import numpy as np
 from PIL import Image as PILImage
 from typing import List
 import onnxruntime as ort
-from scipy.ndimage import zoom
 
 # import tensorrt as trt
-# import pycuda.driver as cuda
-# import pycuda.autoinit
-# from typing import Dict, List, Optional
+import pycuda.driver as cuda
+import pycuda.autoinit
+from typing import Dict, List, Optional
 
 # from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
@@ -27,6 +26,11 @@ IMAGE_ASPECT_RATIO = 4 / 3
 ACTION_STATS = {"min": [-2.5, -4], "max": [5, 4]}
 
 
+# import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+import numpy as np
+from typing import Dict, List
 
 
 # class TRTInfer:
@@ -245,27 +249,27 @@ ACTION_STATS = {"min": [-2.5, -4], "max": [5, 4]}
 #         self.__del__()
 
 
-# def load_model_onnx(model_name: str):
-#     # providers = [
-#     #     (
-#     #         "TensorrtExecutionProvider",
-#     #         {
-#     #             "trt_fp16_enable": False,
-#     #             "trt_engine_cache_enable": True,
-#     #             "trt_engine_cache_path": "./trt_cache",
-#     #         },
-#     #     )
-#     # ]
+def load_model_onnx(model_name: str):
+    # providers = [
+    #     (
+    #         "TensorrtExecutionProvider",
+    #         {
+    #             "trt_fp16_enable": False,
+    #             "trt_engine_cache_enable": True,
+    #             "trt_engine_cache_path": "./trt_cache",
+    #         },
+    #     )
+    # ]
 
-#     providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]  
+    providers = ["CPUExecutionProvider"]  
 
-#     sess_options = ort.SessionOptions()
-#     sess_options.log_severity_level = 0
-#     ort_session = ort.InferenceSession(
-#         f"{model_name}.onnx", sess_options, providers=providers
-#     )
+    sess_options = ort.SessionOptions()
+    sess_options.log_severity_level = 3
+    ort_session = ort.InferenceSession(
+        f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx", sess_options, providers=providers
+    )
 
-#     return ort_session
+    return ort_session
 
 
 # def load_model_trt(model_name: str):
@@ -275,19 +279,19 @@ ACTION_STATS = {"min": [-2.5, -4], "max": [5, 4]}
 #     return trt_model
 
 
-# def msg_to_pil(msg: Image) -> PILImage.Image:
-#     img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
-#     pil_image = PILImage.fromarray(img)
-#     return pil_image
+def msg_to_pil(msg: Image) -> PILImage.Image:
+    img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
+    pil_image = PILImage.fromarray(img)
+    return pil_image
 
 
-# def pil_to_msg(pil_img: PILImage.Image, encoding="mono8") -> Image:
-#     img = np.asarray(pil_img)
-#     ros_image = Image(encoding=encoding)
-#     ros_image.height, ros_image.width, _ = img.shape
-#     ros_image.data = img.ravel().tobytes()
-#     ros_image.step = ros_image.width
-#     return ros_image
+def pil_to_msg(pil_img: PILImage.Image, encoding="mono8") -> Image:
+    img = np.asarray(pil_img)
+    ros_image = Image(encoding=encoding)
+    ros_image.height, ros_image.width, _ = img.shape
+    ros_image.data = img.ravel().tobytes()
+    ros_image.step = ros_image.width
+    return ros_image
 
 
 # def to_numpy(tensor):
@@ -391,59 +395,3 @@ def clip_angle(angle):
 #     ndata = (ndata + 1) / 2
 #     data = ndata * (stats['max'] - stats['min']) + stats['min']
 #     return data
-
-
-
-def center_crop_numpy(img: np.ndarray, crop_size: tuple) -> np.ndarray:
-    """Center crop a numpy image to the specified size (height, width)"""
-    h, w = img.shape[:2]
-    crop_h, crop_w = crop_size
-    
-    start_y = (h - crop_h) // 2
-    start_x = (w - crop_w) // 2
-    
-    return img[start_y:start_y + crop_h, start_x:start_x + crop_w]
-
-def resize_numpy(img: np.ndarray, size: List[int]) -> np.ndarray:
-    """Resize numpy image to target size using scipy zoom"""
-    h, w = img.shape[:2]
-    target_w, target_h = size  # Swapped to match image_size format
-    
-    zoom_factors = [target_h / h, target_w / w]
-    if len(img.shape) == 3:  # Color image
-        zoom_factors.append(1)  # Don't zoom the channel dimension
-    
-    return zoom(img, zoom_factors, order=1)  # order=1 for bilinear interpolation
-
-def transform_numpy_images(
-    np_imgs: List[np.ndarray],
-    image_size: List[int],
-    center_crop: bool = False,
-    return_img: bool = False,
-):
-    """Transforms a list of numpy images to a batched numpy array"""
-    if not isinstance(np_imgs, list):
-        np_imgs = [np_imgs]
-    
-    transf_imgs = []
-    for np_img in np_imgs:
-        h, w = np_img.shape[:2]
-        
-        if center_crop:
-            if w > h:
-                np_img = center_crop_numpy(
-                    np_img, (h, int(h * IMAGE_ASPECT_RATIO))
-                )
-            else:
-                np_img = center_crop_numpy(np_img, (int(w / IMAGE_ASPECT_RATIO), w))
-        
-        np_img = resize_numpy(np_img, image_size)
-        
-        if return_img:
-            return np_img
-        
-        transf_img = transform_numpy(np_img)
-        transf_img = np.expand_dims(transf_img, axis=0)
-        transf_imgs.append(transf_img)
-    
-    return np.concatenate(transf_imgs, axis=1)
