@@ -19,33 +19,45 @@ import torch
 import yaml
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-from utils import msg_to_pil, to_numpy, transform_images, load_model
 from vint_train.training.train_utils import get_action
 
-THIS_DIR = Path.cwd()
-ROBOT_CONFIG_PATH = "../config/robot.yaml"
-MODEL_CONFIG_PATH = "../config/models.yaml"
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
+# UTILS
+from src.utils import msg_to_pil, to_numpy, transform_images, load_model
 
+from src.topic_names import (IMAGE_TOPIC,
+                        WAYPOINT_TOPIC,
+                        SAMPLED_ACTIONS_TOPIC,
+                        CLOSEST_NODE_TOPIC)
+
+# CONSTANTS
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+TOPOMAP_IMAGES_DIR = f"{WORK_DIR}topomaps/images"
+MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
+ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
+MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
 with open(ROBOT_CONFIG_PATH, "r") as f:
-    ROBOT_CONF = yaml.safe_load(f)
-MAX_V = ROBOT_CONF["max_v"]
-MAX_W = ROBOT_CONF["max_w"]
-RATE = ROBOT_CONF["frame_rate"]  # Hz
+    robot_config = yaml.safe_load(f)
+MAX_V = robot_config["max_v"]
+MAX_W = robot_config["max_w"]
+RATE = robot_config["frame_rate"] 
 
 def _load_model(model_name: str, device: torch.device):
-    with open(MODEL_CONFIG_PATH, "r") as f:
-        model_paths = yaml.safe_load(f)
 
-    mconf_path = model_paths[model_name]["config_path"]
-    ckpt_path = model_paths[model_name]["ckpt_path"]
-    with open(mconf_path, "r") as f:
+    model_config_path = f"{MODEL_CONFIG_PATH}{model_name}.yaml"
+    with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
-    if not os.path.exists(ckpt_path):
+    context_size = model_params["context_size"]
+    assert context_size != None
+
+    # load model weights
+    ckpt_path = f"{MODEL_WEIGHTS_PATH}{model_name}.pth"
+    if os.path.exists(ckpt_path):
+        print(f"Loading model from {ckpt_path}")
+    else:
         raise FileNotFoundError(f"Model weights not found at {ckpt_path}")
 
-    print(f"Loading model from {ckpt_path}")
+
     model = load_model(ckpt_path, model_params, device).to(device).eval()
     return model, model_params
 
@@ -60,7 +72,7 @@ class NavigationNode(Node):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.get_logger().info(f"Using device: {self.device}")
 
-        self.model, self.model_params = _load_model(args.model, self.device)
+        self.model, self.model_params = _load_model(self.args.model, self.device)
 
         self.get_logger().info(f"Using model type: {self.model_params['model_type']}")
 
@@ -93,25 +105,10 @@ class NavigationNode(Node):
         self.topomap, self.goal_node = self._load_topomap(args.dir, args.goal_node)
         self.closest_node = 0
 
-        if args.robot == "bunker":
-            image_topic = "/usb_cam/image_raw"
-            waypoint_topic = "/waypoint"
-            sampled_actions_topic = "/robot1/sampled_actions"
-        elif args.robot == "robomaster":
-            image_topic = "/camera/image_color"
-            waypoint_topic = "/robot3/waypoint"
-            sampled_actions_topic = "/robot3/sampled_actions"
-        elif args.robot == "turtlebot4":
-            image_topic = "/robot2/oakd/rgb/preview/image_raw"
-            waypoint_topic = "/robot2/waypoint"
-            sampled_actions_topic = "/robot2/sampled_actions"
-        else:
-            raise ValueError(f"Unknown robot type: {args.robot}")
-
-        self.create_subscription(Image, image_topic, self._image_cb, 1)
-        self.waypoint_pub = self.create_publisher(Float32MultiArray, waypoint_topic, 1)
+        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 1)
+        self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
         self.sampled_actions_pub = self.create_publisher(
-            Float32MultiArray, sampled_actions_topic, 1
+            Float32MultiArray, SAMPLED_ACTIONS_TOPIC, 1
         )
         self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
         self.viz_pub = self.create_publisher(Image, "navigation_viz", 1)
@@ -124,7 +121,7 @@ class NavigationNode(Node):
         self.get_logger().info("NAVIGATION NODE PARAMETERS")
         self.get_logger().info("=" * 60)
         self.get_logger().info(f"Robot type: {self.args.robot}")
-        self.get_logger().info(f"Image topic: {image_topic}")
+        self.get_logger().info(f"Image topic: {IMAGE_TOPIC}")
         self.get_logger().info("-" * 60)
         self.get_logger().info("ROBOT CONFIGURATION:")
         self.get_logger().info(f"  - Max linear velocity: {MAX_V} m/s")
@@ -177,10 +174,10 @@ class NavigationNode(Node):
         )
         self.get_logger().info("-" * 60)
         self.get_logger().info("ROS TOPICS:")
-        self.get_logger().info(f"  - Subscribing to: {image_topic}")
-        self.get_logger().info(f"  - Publishing waypoints to: {waypoint_topic}")
+        self.get_logger().info(f"  - Subscribing to: {IMAGE_TOPIC}")
+        self.get_logger().info(f"  - Publishing waypoints to: {WAYPOINT_TOPIC}")
         self.get_logger().info(
-            f"  - Publishing sampled actions to: {sampled_actions_topic}"
+            f"  - Publishing sampled actions to: {SAMPLED_ACTIONS_TOPIC}"
         )
         self.get_logger().info(
             f"  - Publishing navigation visualization to: /navigation_viz"
@@ -467,7 +464,7 @@ def main():
     parser = argparse.ArgumentParser("Topological navigation (ROS 2)")
     parser.add_argument("--model", "-m", default="vint")
     parser.add_argument(
-        "--dir", "-d", default="mist_office_new_chair", help="sub‑directory under ../topomaps/images/"
+        "--dir", "-d", default="lab_spot", help="sub‑directory under ../topomaps/images/"
     )
     parser.add_argument(
         "--goal-node", "-g", type=int, default=-1, help="Goal node index (-1 = last)"
