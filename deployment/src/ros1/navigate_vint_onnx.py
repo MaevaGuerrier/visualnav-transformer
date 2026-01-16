@@ -145,21 +145,6 @@ def main(args: argparse.Namespace):
                 batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
                 
 
-                # print("batch_obs_imgs shape:", batch_obs_imgs)
-                # print("batch_goal_data shape:", batch_goal_data)
-                # import pdb; pdb.set_trace()
-                # ort_inputs = {
-                #     "obs_img": batch_obs_imgs_np,
-                #     "goal_img": batch_goal_data_np,
-                # }
-
-                # ort_outputs = ort_session.run(None, ort_inputs)
-                # print(f"Inference time without torch {time.time() - start_time}")
-                
-                
-                # distances, waypoints = ort_outputs[0], ort_outputs[1]
-
-
                 distances, waypoints = vint_onnx.run(None, {
                     "obs_img": batch_obs_imgs_np,
                     "goal_img": batch_goal_data_np,
@@ -173,51 +158,20 @@ def main(args: argparse.Namespace):
                 distances_msg = Float32MultiArray()
                 distances_msg.data = distances.flatten()
                 distances_pub.publish(distances_msg)
-                
-                
-                # print("distances shape:", distances.shape, "len:", distances)
-                # print("waypoints shape:", waypoints.shape, "len:", waypoints)
 
                 # look for closest node
                 min_dist_idx = np.argmin(distances)
-                # chose subgoal and output waypoints
-                # print(
-                #     "min dist idx:",
-                #     min_dist_idx,
-                #     "min dist:",
-                #     distances[min_dist_idx],
-                #     "close_threshold:",
-                #     args.close_threshold,
-                # )
+
                 if distances[min_dist_idx] > args.close_threshold:
-                    # print(
-                    #     "Not close enough to the next node, choosing closest waypoint",
-                    #     waypoints[min_dist_idx][args.waypoint],
-                    #     "at index",
-                    #     min_dist_idx,
-                    # )
                     chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
                     closest_node = start + min_dist_idx
                 else:
-                    # print(
-                    #     "Very far already a lost cause ",
-                    #     min(min_dist_idx + 1, len(waypoints) - 1),
-                    # )
                     chosen_waypoint = waypoints[
                         min(min_dist_idx + 1, len(waypoints) - 1)
                     ][args.waypoint]
-                    # print(
-                    #     "closest start",
-                    #     start,
-                    #     "min_dist_idx + 1",
-                    #     min_dist_idx + 1,
-                    #     "goal_node",
-                    #     goal_node,
-                    # )
-                    closest_node = min(start + min_dist_idx + 1, goal_node)
-                # print("chosen wp", chosen_waypoint)
-                # print("min dist idx", min_dist_idx)
 
+                    closest_node = min(start + min_dist_idx + 1, goal_node)
+  
                 print("closest node:", closest_node)
                 closest_node_msg = Int32()
                 closest_node_msg.data = closest_node

@@ -465,7 +465,7 @@ class NavigationNode(Node):
 
 def main():
     parser = argparse.ArgumentParser("Topological navigation (ROS 2)")
-    parser.add_argument("--model", "-m", default="vint")
+    parser.add_argument("--model", "-m")
     parser.add_argument(
         "--dir", "-d", default="mist_office_new_chair", help="sub‑directory under ../topomaps/images/"
     )
