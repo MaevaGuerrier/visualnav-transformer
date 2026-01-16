@@ -43,7 +43,6 @@ with open(ROBOT_CONFIG_PATH, "r") as f:
 MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
-VEL_TOPIC = robot_config["vel_navi_topic"]
 
 # GLOBALS
 context_queue = []
