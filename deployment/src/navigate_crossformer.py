@@ -15,7 +15,7 @@ import yaml
 from PIL import Image as PILImage
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, Bool
-# import onnxruntime as ort
+
 
 # from utils import pil_to_numpy_array
 import jax
@@ -28,8 +28,12 @@ from sensor_msgs.msg import Image
 from topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
                         SAMPLED_ACTIONS_TOPIC)
+from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
 
-from utils_onnx import msg_to_pil, transform_images, load_model_onnx
+# CONSTANTS
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
+MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
 
 def msg_to_pil(msg: Image) -> PILImage.Image:
     img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
@@ -176,9 +180,29 @@ class TopomapNavigationController(Node):
 
 
     # The authors of crossformer used vint for distance prediction
-    def _load_dist_predictor(self):
-        model_params = {"normalize": True, "context_size": 5, "image_size": [85, 64]}
-        model = load_model_onnx("vint")
+    def _load_dist_predictor(self, dist_model_name: str = "vint") -> tuple:
+        
+
+        model_config_path = f"{MODEL_CONFIG_PATH}{dist_model_name}.yaml"
+        with open(model_config_path, "r") as f:
+            model_params = yaml.safe_load(f)
+
+        context_size = model_params["context_size"]
+        assert context_size != None
+
+        # load model weights
+        ckpth_path = f"{MODEL_WEIGHTS_PATH}{dist_model_name}.pth"
+        if os.path.exists(ckpth_path):
+            print(f"Loading model from {ckpth_path}")
+        else:
+            raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
+        model = load_model(
+            ckpth_path,
+            model_params,
+            device,
+        )
+        model = model.to(device)
+        model.eval()
 
         return model, model_params
 
@@ -193,42 +217,29 @@ class TopomapNavigationController(Node):
 
     def _predict_actions(self) -> np.ndarray:
 
+
         start = max(self.closest_node - self.args.radius, 0)
         end = min(self.closest_node + self.args.radius + 1, self.goal_node)
-        # import pdb; pdb.set_trace()
-        crop = True
-        
+
+        batch_obs_imgs = []
+        batch_goal_data = []
+
         start_time = time.time()
-        # Transform observation once
-        transf_obs_img = transform_images(
-            list(self.context_queue), self.dist_model_params["image_size"], center_crop=crop
-        )
+        for i, sg_img in enumerate(self.topomap[start : end + 1]):
+            transf_obs_img = transform_images(
+                list(self.context_queue), self.model_params["image_size"]
+            )
+            goal_data = transform_images(sg_img, self.model_params["image_size"])
+            batch_obs_imgs.append(transf_obs_img)
+            batch_goal_data.append(goal_data)
 
-        # Vectorized goal processing
-        goal_imgs = self.topomap[start : end + 1]
-        batch_goal_data_np = np.concatenate(
-            [
-                transform_images(
-                    sg_img, self.dist_model_params["image_size"], center_crop=crop
-                )
-                for sg_img in goal_imgs
-            ],
-            axis=0,
-        ).astype("float32")
+        batch_obs_imgs = torch.cat(batch_obs_imgs, dim=0).to(self.device)
+        batch_goal_data = torch.cat(batch_goal_data, dim=0).to(self.device)
 
-        # Repeat observation for batch
-        num_goals = len(goal_imgs)
-        batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype(
-            "float32"
-        )
-
-        ort_inputs = {
-            "obs_img": batch_obs_imgs_np,
-            "goal_img": batch_goal_data_np,
-        }
-        distances = self.dist_pred_network.run(None, ort_inputs)[0]
-        # import pdb; pdb.set_trace()
-        # print(f"Inference time without torch {time.time() - time_0}")
+        with torch.no_grad():
+            distances, _ = self.dist_pred_network(batch_obs_imgs, batch_goal_data)
+        distances_np = to_numpy(distances)
+ 
 
         min_dist_idx = np.argmin(distances)
         self.closest_node = start + min_dist_idx
