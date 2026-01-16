@@ -15,7 +15,7 @@ from src.utils_onnx import msg_to_pil, transform_images, load_model_trt, load_mo
 
 
 # To DELETE AS WE CHECK THAT EACH TRT MODULE WORKS CORRECTLY -----------------------------
-from src.utils import load_model, to_numpy
+from src.utils import to_numpy
 from vint_train.training.train_utils import get_action
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 # --------------------------------------------------------------------------------
@@ -94,7 +94,7 @@ def main(args: argparse.Namespace):
     ort_sess_dist_pred = load_model_onnx("nomad_dist_pred_net")
     print("loaded distance predictor onnx model")
     ort_sess_noise_pred = load_model_onnx("nomad_noise_pred_net")
-    # print("loaded noise predictor onnx model")
+    print("loaded noise predictor onnx model")
     # load topomap
     topomap_filenames = sorted(
         os.listdir(os.path.join(TOPOMAP_IMAGES_DIR, args.dir)),

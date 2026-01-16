@@ -239,7 +239,7 @@ class NavigationNode(Node):
             "goal_img": batch_goal_data_np,
         })
         inference_time = time.time() - start_time
-        print(f"Inference time: {inference_time:.3f} seconds")
+        self.get_logger().info(f"Inference time: {inference_time:.3f} seconds")
 
 
         # look for closest node
