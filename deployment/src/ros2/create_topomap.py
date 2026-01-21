@@ -11,7 +11,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 from sensor_msgs.msg import Joy
 from PIL import Image as PILImage
-from topic_names import IMAGE_TOPIC
+from src.topic_names import IMAGE_TOPIC
 TOPOMAP_IMAGES_DIR = "../topomaps/images"
 
 class TopomapCreator(Node):

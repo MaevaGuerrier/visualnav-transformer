@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
 
-import rospy
-import rostopic
+import rclpy
+from rclpy.node import Node
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from collections import deque
 import time
 import yaml
+from rosidl_runtime_py.utilities import get_message
+import importlib
 
-class TopicRateMonitor:
+class TopicRateMonitor(Node):
     def __init__(self, topics=None, expected_rates=None, rate_tolerance=0.3, window_size=10):
-        rospy.init_node('topic_rate_monitor', anonymous=True)
+        super().__init__('topic_rate_monitor')
+        
         assert topics is not None, "You must provide a list of topics to monitor."
         assert expected_rates is not None, "You must provide a list of expected rates for the topics."
 
         # Parameters
-        self.topics_to_monitor = rospy.get_param('~topics', topics)
-        self.expected_rates = rospy.get_param('~expected_rates', expected_rates)  # Hz
-        self.rate_tolerance = rospy.get_param('~rate_tolerance', rate_tolerance)  # 30% tolerance
-        self.window_size = rospy.get_param('~window_size', window_size)  # Number of messages to average
+        self.declare_parameter('topics', topics)
+        self.declare_parameter('expected_rates', expected_rates)
+        self.declare_parameter('rate_tolerance', rate_tolerance)
+        self.declare_parameter('window_size', window_size)
+        
+        self.topics_to_monitor = self.get_parameter('topics').value
+        self.expected_rates = self.get_parameter('expected_rates').value
+        self.rate_tolerance = self.get_parameter('rate_tolerance').value
+        self.window_size = self.get_parameter('window_size').value
         
         # Storage for timing data
         self.topic_times = {}
         self.subscribers = {}
         
         # Diagnostics publisher
-        self.diag_pub = rospy.Publisher('/topics_rate', DiagnosticArray, queue_size=10)
+        self.diag_pub = self.create_publisher(DiagnosticArray, '/topics_rate', 10)
         
         # Subscribe to topics
         for i, topic in enumerate(self.topics_to_monitor):
@@ -36,23 +44,57 @@ class TopicRateMonitor:
             
             # Get topic type
             try:
-                topic_type, _, _ = rostopic.get_topic_class(topic, blocking=True)
+                topic_type = self.get_topic_type(topic)
                 if topic_type:
-                    self.subscribers[topic] = rospy.Subscriber(
-                        topic, 
-                        topic_type, 
-                        self.topic_callback, 
-                        callback_args=topic
-                    )
-                    rospy.loginfo(f"Monitoring topic: {topic} (expected rate: {self.topic_times[topic]['expected_rate']} Hz)")
+                    msg_class = self.get_message_class(topic_type)
+                    if msg_class:
+                        self.subscribers[topic] = self.create_subscription(
+                            msg_class,
+                            topic,
+                            lambda msg, topic_name=topic: self.topic_callback(msg, topic_name),
+                            10
+                        )
+                        self.get_logger().info(f"Monitoring topic: {topic} (expected rate: {self.topic_times[topic]['expected_rate']} Hz)")
+                    else:
+                        self.get_logger().warn(f"Could not load message class for topic: {topic}")
                 else:
-                    rospy.logwarn(f"Could not determine type for topic: {topic}")
+                    self.get_logger().warn(f"Could not determine type for topic: {topic}")
             except Exception as e:
-                rospy.logerr(f"Failed to subscribe to {topic}: {e}")
+                self.get_logger().error(f"Failed to subscribe to {topic}: {e}")
         
-        # Timer for publishing diagnostics
-        self.timer = rospy.Timer(rospy.Duration(1.0), self.publish_diagnostics)
+        # Timer for publishing diagnostics (1 Hz)
+        self.timer = self.create_timer(1.0, self.publish_diagnostics)
         
+    def get_topic_type(self, topic_name):
+        """Get the message type for a topic"""
+        topic_names_and_types = self.get_topic_names_and_types()
+        
+        for name, types in topic_names_and_types:
+            if name == topic_name:
+                if types:
+                    return types[0]  # Return first type
+        return None
+    
+    def get_message_class(self, topic_type):
+        """Convert topic type string to message class"""
+        try:
+            # topic_type format: 'package/msg/MessageType'
+            parts = topic_type.split('/')
+            if len(parts) == 3:
+                package_name = parts[0]
+                msg_name = parts[2]
+                
+                # Import the message module
+                module = importlib.import_module(f'{package_name}.msg')
+                msg_class = getattr(module, msg_name)
+                return msg_class
+            else:
+                self.get_logger().error(f"Invalid topic type format: {topic_type}")
+                return None
+        except Exception as e:
+            self.get_logger().error(f"Failed to load message class for {topic_type}: {e}")
+            return None
+    
     def topic_callback(self, msg, topic_name):
         """Callback for each monitored topic"""
         current_time = time.time()
@@ -77,10 +119,10 @@ class TopicRateMonitor:
             return 1.0 / avg_dt
         return None
     
-    def publish_diagnostics(self, event):
+    def publish_diagnostics(self):
         """Publish diagnostic messages"""
         msg = DiagnosticArray()
-        msg.header.stamp = rospy.Time.now()
+        msg.header.stamp = self.get_clock().now().to_msg()
         
         for topic_name, data in self.topic_times.items():
             status = DiagnosticStatus()
@@ -95,7 +137,7 @@ class TopicRateMonitor:
                 status.message = "Waiting for messages..."
                 status.values.append(KeyValue(key="Expected Rate (Hz)", value=str(expected_rate)))
                 status.values.append(KeyValue(key="Current Rate (Hz)", value="N/A"))
-                rospy.logwarn(f"No messages received yet on topic: {topic_name}")
+                self.get_logger().warn(f"No messages received yet on topic: {topic_name}", throttle_duration_sec=5.0)
             else:
                 # Check if rate is within tolerance
                 min_rate = expected_rate * (1 - self.rate_tolerance)
@@ -106,15 +148,14 @@ class TopicRateMonitor:
                 if current_rate < min_rate:
                     status.level = DiagnosticStatus.ERROR
                     status.message = f"{topic_name} Rate too low! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
-                    rospy.logwarn(status.message)
+                    self.get_logger().warn(status.message, throttle_duration_sec=5.0)
                 # elif current_rate > max_rate:
                 #     status.level = DiagnosticStatus.WARN
                 #     status.message = f"{topic_name} Rate too high! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
-                #     rospy.logwarn(status.message)
+                #     self.get_logger().warn(status.message, throttle_duration_sec=5.0)
                 # else:
                 #     status.level = DiagnosticStatus.OK
                 #     status.message = f"Rate OK: {current_rate:.2f} Hz"
-
                 
                 status.values.append(KeyValue(key="Expected Rate (Hz)", value=str(expected_rate)))
                 status.values.append(KeyValue(key="Current Rate (Hz)", value=f"{current_rate:.2f}"))
@@ -123,27 +164,15 @@ class TopicRateMonitor:
                 status.values.append(KeyValue(key="Max Acceptable (Hz)", value=f"{max_rate:.2f}"))
                 status.values.append(KeyValue(key="Messages in Window", value=str(len(data['times']))))
             
-            # Check for stale messages (no message in 2x expected period)
-            # if data['last_msg_time'] is not None:
-            #     time_since_last = time.time() - data['last_msg_time']
-            #     max_delay = 2.0 / expected_rate if expected_rate > 0 else 1.0
-                
-            #     if time_since_last > max_delay:
-            #         status.level = DiagnosticStatus.STALE
-            #         status.message = f"No messages for {time_since_last:.2f}s!"
-            #         status.values.append(KeyValue(key="Time Since Last Message (s)", value=f"{time_since_last:.2f}"))
-            #         rospy.logwarn(f"Stale topic detected: {topic_name}, last message {time_since_last:.2f}s ago")
-            
             msg.status.append(status)
         
         self.diag_pub.publish(msg)
+
+def main(args=None):
+    rclpy.init(args=args)
     
-    def run(self):
-        rospy.spin()
-
-if __name__ == '__main__':
     try:
-
+        # Load configuration files
         with open('/workspace/src/visualnav-transformer/deployment/config/monitor.yaml', 'r') as f:
             monitor_cfg = yaml.safe_load(f)
 
@@ -160,11 +189,21 @@ if __name__ == '__main__':
         expected_rates.append(cmd_vel_rate)
 
         # Assign /waypoint rate with cmd_vel rate
-        expected_rates[topics.index('/waypoint')] = cmd_vel_rate
+        if '/waypoint' in topics:
+            expected_rates[topics.index('/waypoint')] = cmd_vel_rate
 
-        rospy.loginfo(f"Monitoring topics: {topics} with expected rates: {expected_rates}")
+        print(f"Monitoring topics: {topics} with expected rates: {expected_rates}")
 
         monitor = TopicRateMonitor(topics=topics, expected_rates=expected_rates)
-        monitor.run()
-    except rospy.ROSInterruptException:
+        rclpy.spin(monitor)
+        
+    except KeyboardInterrupt:
         pass
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        monitor.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

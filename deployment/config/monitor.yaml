@@ -4,9 +4,10 @@ topics:
   /usb_cam/image_raw: 30     
   /oak/rgb/image_raw/compressed: 6     
   /usb_cam/image_raw/compressed: 30  
-  /lvi_sam/lidar/mapping/odometry: 5        
+  /lvi_sam/lidar/mapping/odometry: 5 # bunker odometry  
   /os_cloud_node/points: 9  
-  /waypoint: -1 # will be override by cmd_vel         
+  /waypoint: -1 # will be override by cmd_vel   
+  /laser_odometry: 9  # spot odometry 
 
 # IMPORTANT
 # cmd_vel comes frome robot.yaml
