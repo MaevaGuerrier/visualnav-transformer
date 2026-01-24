@@ -44,10 +44,10 @@ tmux send-keys "python3 pd_controller.py" Enter
 
 
 tmux select-pane -t $SESSION:0.2
-# tmux send-keys "python3 topic_hz_monitor.py" Enter 
+tmux send-keys "python3 topic_hz_monitor.py" Enter 
 
 tmux select-pane -t $SESSION:0.3
-# tmux send-keys "python3 monitor.py" Enter
+tmux send-keys "python3 monitor.py" Enter
 
 # Attach to the session
 tmux attach -t $SESSION

@@ -15,7 +15,7 @@ from cv_bridge import CvBridge
 from PIL import Image as PILImage
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool, Float32MultiArray
+from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 import torch
 import yaml
 
@@ -88,10 +88,25 @@ class NavigationNode(Node):
         self.sampled_actions_pub = self.create_publisher(
             Float32MultiArray, SAMPLED_ACTIONS_TOPIC, 1
         )
-        self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
+        
         self.viz_pub = self.create_publisher(Image, "navigation_viz", 1)
         self.subgoal_pub = self.create_publisher(Image, "navigation_subgoal", 1)
         self.goal_pub_img = self.create_publisher(Image, "navigation_goal", 1)
+
+
+        ######    Publisher used for data collection #############################
+
+        self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
+        self.goal_img_pub = self.create_publisher(Image, "/topoplan/goal_img", 1)
+        self.subgoal_img_pub = self.create_publisher(Image, "/topoplan/subgoal_img", 1)
+        self.closest_node_img_pub = self.create_publisher(Image, "/topoplan/closest_node_img", 1)
+        self.closest_node_pub = self.create_publisher(Int32, CLOSEST_NODE_TOPIC, 10)
+        self.distances_pub = self.create_publisher(Float32MultiArray, "/distances", 1)
+        self.inference_pub = self.create_publisher(Float32, "/inference_time", 10)
+
+
+        #########################################################################
+
         self.create_timer(1.0 / RATE, self._timer_cb)
         self.get_logger().info("Navigation node initialised. Waiting for images…")
 
@@ -241,6 +256,10 @@ class NavigationNode(Node):
         inference_time = time.time() - start_time
         self.get_logger().info(f"Inference time: {inference_time:.3f} seconds")
 
+        inference_time_msg = Float32()
+        inference_time_msg.data = inference_time
+        self.inference_pub.publish(inference_time_msg)
+
 
         # look for closest node
         min_dist_idx = np.argmin(distances)
@@ -254,6 +273,10 @@ class NavigationNode(Node):
             ][self.args.waypoint]
 
             self.closest_node = min(start + min_dist_idx + 1, self.goal_node)
+
+        closest_node_msg = Int32()
+        closest_node_msg.data = int(self.closest_node)
+        self.closest_node_pub.publish(closest_node_msg)
 
         if self.model_params["normalize"]:
             chosen_waypoint[:2] *= MAX_V / RATE
