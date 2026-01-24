@@ -171,7 +171,7 @@ class TopicRateMonitor(Node):
 def main(args=None):
     rclpy.init(args=args)
     
-    baseline_path = "NaiviBridger"
+    baseline_path = "visualnav-transformer"
 
     root_path=f"/workspace/src/{baseline_path}/deployment/config"
 
