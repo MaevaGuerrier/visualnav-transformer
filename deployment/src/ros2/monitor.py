@@ -110,9 +110,9 @@ class SimpleJetsonMonitor(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    
+    node = SimpleJetsonMonitor()
     try:
-        node = SimpleJetsonMonitor()
+        
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass

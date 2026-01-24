@@ -32,7 +32,7 @@ from src.topic_names import (
 
 # CONSTANTS
 WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
-TOPOMAP_IMAGES_DIR = f"{WORK_DIR}src/topomaps/images" #/home/indro/SafeGNM/src/visualnav-transformer/deployment/src/topomaps/images
+TOPOMAP_IMAGES_DIR = f"{WORK_DIR}/topomaps/images" #/home/indro/SafeGNM/src/visualnav-transformer/deployment/src/topomaps/images
 MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
 ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
 MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
