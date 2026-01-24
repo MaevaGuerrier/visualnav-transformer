@@ -4,6 +4,7 @@
 FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"
 REVERSE_IMAGE_TOPIC = "/usb_cam_reverse/image_raw"
 IMAGE_TOPIC = "/usb_cam/image_raw" #"/oak/rgb/image_raw" #
+CLOSEST_NODE_TOPIC = "/closest_node"
 DEPTH_IMAGE_UNDISTORTED_TOPIC = "/topoplan/depth_image_undistorted"
 IMAGE_UNDISTORTED_TOPIC = "/topoplan/image_undistorted"
 COSTMAP_TOPIC = "/topoplan/costmap"

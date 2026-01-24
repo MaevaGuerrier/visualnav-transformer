@@ -14,7 +14,7 @@ import time
 import yaml
 from PIL import Image as PILImage
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float32MultiArray, Bool
+from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 # import onnxruntime as ort
 
 # from utils import pil_to_numpy_array
@@ -25,9 +25,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from sensor_msgs.msg import Image
 
 # UTILS
-from topic_names import (IMAGE_TOPIC,
-                        WAYPOINT_TOPIC,
-                        SAMPLED_ACTIONS_TOPIC)
+from topic_names import (
+    IMAGE_TOPIC,
+    WAYPOINT_TOPIC,
+    SAMPLED_ACTIONS_TOPIC,
+    CLOSEST_NODE_TOPIC,
+)
 
 from utils_onnx import msg_to_pil, transform_images, load_model_onnx
 
@@ -103,11 +106,24 @@ class TopomapNavigationController(Node):
             qos_profile
         )
         self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
-        self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
         self.sampled_actions_pub = self.create_publisher(
             Float32MultiArray, SAMPLED_ACTIONS_TOPIC, 1
         )
-        self.goal_pub_img = self.create_publisher(Image, "/topoplan/goal_img", 1)
+
+
+        ######    Publisher used for data collection #############################
+
+        self.goal_pub = self.create_publisher(Bool, "/topoplan/reached_goal", 1)
+        self.goal_img_pub = self.create_publisher(Image, "/topoplan/goal_img", 1)
+        self.subgoal_img_pub = self.create_publisher(Image, "/topoplan/subgoal_img", 1)
+        self.closest_node_img_pub = self.create_publisher(Image, "/topoplan/closest_node_img", 1)
+        self.closest_node_pub = self.create_publisher(Int32, CLOSEST_NODE_TOPIC, 10)
+        self.distances_pub = self.create_publisher(Float32MultiArray, "/distances", 1)
+        self.inference_pub = self.create_publisher(Float32, "/inference_time", 10)
+
+
+        #########################################################################
+
 
         self.create_timer(1.0 / self.rate, self.run)
 
@@ -233,6 +249,11 @@ class TopomapNavigationController(Node):
         min_dist_idx = np.argmin(distances)
         self.closest_node = start + min_dist_idx
 
+        closest_node_msg = Int32()
+        closest_node_msg.data = int(self.closest_node)
+        self.closest_node_pub.publish(closest_node_msg)
+
+
         if distances[min_dist_idx] > self.args.close_threshold:
             sg_idx = self.closest_node
         else:
@@ -263,6 +284,10 @@ class TopomapNavigationController(Node):
         )
         inference_time = time.time() - start_time
         print(f"Inference time: {inference_time:.3f} seconds")
+
+        inference_time_msg = Float32()
+        inference_time_msg.data = inference_time
+        self.inference_pub.publish(inference_time_msg)
 
         action = np.array(action, dtype=np.float64)
 
