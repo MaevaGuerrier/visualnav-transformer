@@ -11,6 +11,9 @@ import torch
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
 from vint_train.data.data_utils import (
     img_path_to_data,
     calculate_sin_cos,
@@ -40,6 +43,9 @@ class ViNT_Dataset(Dataset):
         normalize: bool = True,
         obs_type: str = "image",
         goal_type: str = "image",
+        flip_aug: bool = False,
+        image_aug: bool = False,
+        image_aug_params: Dict[str, Any] = {},
     ):
         """
         Main ViNT dataset class
@@ -84,6 +90,22 @@ class ViNT_Dataset(Dataset):
             self.distance_categories.append(-1)
         self.len_traj_pred = len_traj_pred
         self.learn_angle = learn_angle
+        self.flip_aug = flip_aug
+        self.image_aug = image_aug
+        if self.image_aug:
+            self.obs_aug_transform = A.Compose([
+                A.ColorJitter(**image_aug_params.get("color_jitter", {})),
+                A.GaussianBlur(**image_aug_params.get("gaussian_blur", {})),
+                A.CoarseDropout(**image_aug_params.get("coarse_dropout", {})),
+                ToTensorV2(),
+            ], additional_targets={f"image{i}": "image" for i in range(1, context_size+1)})
+            self.goal_aug_transform = A.Compose([
+                A.ColorJitter(**image_aug_params.get("color_jitter", {})),
+                A.GaussianBlur(**image_aug_params.get("gaussian_blur", {})),
+                A.CoarseDropout(**image_aug_params.get("coarse_dropout", {})),
+                ToTensorV2(),
+            ])
+
 
         self.min_action_distance = min_action_distance
         self.max_action_distance = max_action_distance
@@ -279,11 +301,16 @@ class ViNT_Dataset(Dataset):
         else:
             with open(os.path.join(self.data_folder, trajectory_name, "traj_data.pkl"), "rb") as f:
                 traj_data = pickle.load(f)
+            for k in traj_data:
+                traj_data[k] = traj_data[k].astype(np.float32)
             self.trajectory_cache[trajectory_name] = traj_data
             return traj_data
 
     def __len__(self) -> int:
         return len(self.index_to_data)
+
+    def _apply_image_augmentation(self, image: torch.Tensor, aug_params: Dict[str, Any]) -> torch.Tensor:
+        pass
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor]:
         """
@@ -333,6 +360,30 @@ class ViNT_Dataset(Dataset):
 
         # Compute actions
         actions, goal_pos = self._compute_actions(curr_traj_data, curr_time, goal_time)
+
+        if self.flip_aug:
+            if np.random.rand() < 0.5:
+                actions[:, 1] *= -1 # flip y (y is left/right)
+                if self.learn_angle: # flip yaw
+                    actions[:, 2] *= -1
+                goal_pos[1] *= -1
+
+                obs_image = obs_image.flip(-1)
+                goal_image = goal_image.flip(-1)
+
+        if self.image_aug:
+            # apply image augmentation to obs image and goal image
+            # obs images should be applied the same augmentation
+            # I don't know why obs_image has context_size + 1, probably bugged code by author
+            goal_image = self.goal_aug_transform(image=goal_image.permute(1, 2, 0).numpy())["image"]
+            obs_image_transformed = self.obs_aug_transform(
+                **{f"image{i if i > 0 else ''}": obs_image[i*3:(i+1)*3].permute(1, 2, 0).numpy() for i in range(self.context_size+1)}
+            )
+            obs_image = torch.cat([
+                obs_image_transformed[f"image{i if i > 0 else ''}"] for i in range(self.context_size+1)
+            ])
+
+        #self._save_images(obs_image, goal_image, i)
         
         # Compute distances
         if goal_is_negative:
@@ -359,4 +410,23 @@ class ViNT_Dataset(Dataset):
             torch.as_tensor(goal_pos, dtype=torch.float32),
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
+        )
+
+    def _save_images(self, obs_image: torch.Tensor, goal_image: torch.Tensor, index: int) -> None:
+        """
+        Save the observation and goal images to disk for debugging purposes
+        """
+        import torchvision.utils as vutils
+        print('saving debug images...')
+        os.makedirs("debug_images", exist_ok=True)
+        print(obs_image.shape, goal_image.shape)
+        vutils.save_image(
+            obs_image[-3:],
+            f"debug_images/obs_image_{index}.png",
+            normalize=False,
+        )
+        vutils.save_image(
+            goal_image,
+            f"debug_images/goal_image_{index}.png",
+            normalize=False,
         )

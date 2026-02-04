@@ -65,8 +65,11 @@ def main(args: argparse.Namespace):
                 f"{bag_path} did not have the topics we were looking for. Skipping..."
             )
             continue
+
         # remove backwards movement
-        cut_trajs = filter_backwards(bag_img_data, bag_traj_data)
+        #cut_trajs = filter_backwards(bag_img_data, bag_traj_data)
+        # Ignore removing backwards movement for now
+        cut_trajs = ((bag_img_data, bag_traj_data), )
   
 
         for i, (img_data_i, traj_data_i) in enumerate(cut_trajs):

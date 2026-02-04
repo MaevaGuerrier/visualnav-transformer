@@ -218,7 +218,8 @@ def train_eval_loop_nomad(
                 use_wandb=use_wandb,
                 alpha=alpha,
             )
-            lr_scheduler.step()
+            if lr_scheduler is not None:
+                lr_scheduler.step()
 
         numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
         torch.save(ema_model.averaged_model.state_dict(), numbered_path)
@@ -238,7 +239,7 @@ def train_eval_loop_nomad(
         # save scheduler
         numbered_path = os.path.join(project_folder, f"scheduler_{epoch}.pth")
         latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
-        torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
+        torch.save(lr_scheduler.state_dict() if lr_scheduler is not None else None, latest_scheduler_path)
 
 
         if (epoch + 1) % eval_freq == 0: 

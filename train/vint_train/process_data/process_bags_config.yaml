@@ -27,3 +27,45 @@ sacson:
   odom_process_func: "nav_to_xy_yaw"
 
 # add your own datasets below:
+
+bunker_bags:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_sacson_img"
+  odom_process_func: "nav_to_xy_yaw"
+
+bunker_bags_references:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw"
+  ang_offset: 0.0
+  img_process_func: "process_reference_img"
+  odom_process_func: "nav_to_xy_yaw"
+
+arena_hard:
+  odomtopics: "/laser_odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_sacson_img"
+  odom_process_func: "nav_to_xy_yaw"
+
+office_loop_5dec:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_reference_img"
+  odom_process_func: "nav_to_xy_yaw"
+
+hall_loop:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_sacson_img"
+  odom_process_func: "nav_to_xy_yaw"
+
+door_loop:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_sacson_img"
+  odom_process_func: "nav_to_xy_yaw"

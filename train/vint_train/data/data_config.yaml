@@ -28,10 +28,19 @@ recon:
 scand:
   metric_waypoint_spacing: 0.38
 
+bunker_bags:
+  metric_waypoint_spacing: 0.0767
+
+bunker_bags_references:
+  metric_waypoint_spacing: 0.11166568189492987
+
 tartan_drive:
   metric_waypoint_spacing: 0.72
 
 go_stanford:
+  metric_waypoint_spacing: 0.12
+
+go_stanford_test:
   metric_waypoint_spacing: 0.12
 
 # private datasets:

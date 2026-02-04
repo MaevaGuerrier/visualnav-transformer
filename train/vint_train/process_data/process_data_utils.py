@@ -71,6 +71,21 @@ def process_sacson_img(msg) -> Image:
     pil_image = Image.fromarray(image_np)
     return pil_image
 
+def process_arena_img(msg) -> Image:
+    np_arr = np.fromstring(msg.data, np.uint8)
+    np_arr = np_arr.reshape((msg.height, msg.width, -1))
+    pil_image = Image.fromarray(np_arr)
+    return pil_image
+
+def process_reference_img(msg) -> Image:
+    """
+    Process image data from a topic that publishes sensor_msgs/Image to a PIL image
+    """
+    img = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+        msg.height, msg.width, -1)
+    pil_image = Image.fromarray(img)
+    return pil_image
+
 
 #######################################################################
 

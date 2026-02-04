@@ -14,6 +14,8 @@ from torchvision import transforms
 import torch.backends.cudnn as cudnn
 from warmup_scheduler import GradualWarmupScheduler
 
+from timm.utils import ModelEmaV2
+
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.optimization import get_scheduler
 
@@ -115,13 +117,14 @@ def main(config):
                         goals_per_obs=data_config["goals_per_obs"],
                         normalize=config["normalize"],
                         goal_type=config["goal_type"],
+                        flip_aug=config["flip_aug"] if "flip_aug" in config and data_split_type=="train" else False,
+                        image_aug=config["image_aug"] if "image_aug" in config and data_split_type=="train" else False,
+                        image_aug_params=config["image_aug_params"] if "image_aug_params" in config and data_split_type=="train" else {},
                     )
                     if data_split_type == "train":
                         train_dataset.append(dataset)
                     else:
                         dataset_type = f"{dataset_name}_{data_split_type}"
-                        if dataset_type not in test_dataloaders:
-                            test_dataloaders[dataset_type] = {}
                         test_dataloaders[dataset_type] = dataset
 
     # combine all the datasets from different robots
@@ -147,10 +150,6 @@ def main(config):
             num_workers=0,
             drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )
-
-
-    print("EXISTING BEFORE TRAINING")
-    exit()
 
     # Create the model
     if config["model_type"] == "gnm":
@@ -288,6 +287,18 @@ def main(config):
             )
 
     current_epoch = 0
+    if "pretrained_weights" in config:
+        pretrained_path = config["pretrained_weights"]
+        print("Loading pretrained weights from ", pretrained_path)
+        pretrained_checkpoint = torch.load(pretrained_path) #map_location=f"cuda:{first_gpu_id}" if torch.cuda.is_available() else "cpu")
+        load_model(model, config["model_type"], pretrained_checkpoint)
+    if "ema" in config:
+        print("Using EMA with decay", config["ema"])
+        model = ModelEmaV2(
+            model,
+            decay=config["ema"],
+            device=device,
+        )
     if "load_run" in config:
         load_project_folder = os.path.join("logs", config["load_run"])
         print("Loading model from ", load_project_folder)
@@ -296,6 +307,20 @@ def main(config):
         load_model(model, config["model_type"], latest_checkpoint)
         if "epoch" in latest_checkpoint:
             current_epoch = latest_checkpoint["epoch"] + 1
+
+    if "freeze_encoders" in config and config["freeze_encoders"]:
+        print("Freezing vision encoder weights")
+        if config["model_type"] == "vint":
+            for param in model.module.obs_encoder.parameters():
+                param.requires_grad = False
+        elif config["model_type"] == "gnm":
+            for param in model.module.obs_mobilenet.parameters():
+                param.requires_grad = False
+        elif config["model_type"] == "nomad":
+            for param in model.module.vision_encoder.parameters():
+                param.requires_grad = False
+        else:
+            raise ValueError(f"Model {config['model_type']} not supported for freezing encoders")
 
     # Multi-GPU
     if len(config["gpu_ids"]) > 1:
@@ -322,6 +347,7 @@ def main(config):
             project_folder=config["project_folder"],
             normalized=config["normalize"],
             print_log_freq=config["print_log_freq"],
+            wandb_log_freq=config["wandb_log_freq"],
             image_log_freq=config["image_log_freq"],
             num_images_log=config["num_images_log"],
             current_epoch=current_epoch,
@@ -398,7 +424,7 @@ if __name__ == "__main__":
         wandb.init(
             project=config["project_name"],
             settings=wandb.Settings(start_method="fork"),
-            entity="maeva_guerrier_rl", # TODO: change this to your wandb entity
+            entity=config["wandb_entity"]
         )
         wandb.save(args.config, policy="now")  # save the config file
         wandb.run.name = config["run_name"]
