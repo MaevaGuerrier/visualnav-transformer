@@ -26,6 +26,7 @@ def main(args: argparse.Namespace):
     ]
 
     # Randomly shuffle the names of the folders
+    random.seed(args.seed)
     random.shuffle(folder_names)
 
     # Split the names of the folders into train and test sets
@@ -69,6 +70,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data-splits-dir", "-o", default="vint_train/data/data_splits", help="Data splits directory"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=3045, help="Random seed for shuffling (default: 42)"
     )
     args = parser.parse_args()
     main(args)
