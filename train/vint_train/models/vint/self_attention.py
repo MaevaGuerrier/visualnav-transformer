@@ -21,7 +21,7 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x):
         # Add the positional encoding to the input
-        x = x + self.pos_enc[:, :x.size(1), :]
+        x = x + self.pos_enc[:, :x.shape[1], :]
         return x
 
 class MultiLayerDecoder(nn.Module):
@@ -40,6 +40,29 @@ class MultiLayerDecoder(nn.Module):
         x = self.sa_decoder(x)
         # currently, x is [batch_size, seq_len, embed_dim]
         x = x.reshape(x.shape[0], -1)
+        for i in range(len(self.output_layers)):
+            x = self.output_layers[i](x)
+            x = F.relu(x)
+        return x
+
+# Come up with a better name
+class LastTokenMultiLayerDecoder(nn.Module):
+    def __init__(self, embed_dim=512, seq_len=6, output_layers=[256, 128, 64], nhead=8, num_layers=8, ff_dim_factor=4, apply_positional_encoding=True):
+        super(LastTokenMultiLayerDecoder, self).__init__()
+        self.positional_encoding = PositionalEncoding(embed_dim, max_seq_len=seq_len) if apply_positional_encoding else None
+        self.sa_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=nhead, dim_feedforward=ff_dim_factor*embed_dim, activation="gelu", batch_first=True, norm_first=True)
+        self.sa_decoder = nn.TransformerEncoder(self.sa_layer, num_layers=num_layers)
+        self.output_layers = nn.ModuleList([nn.Linear(embed_dim, embed_dim)])
+        self.output_layers.append(nn.Linear(embed_dim, output_layers[0]))
+        for i in range(len(output_layers)-1):
+            self.output_layers.append(nn.Linear(output_layers[i], output_layers[i+1]))
+
+    def forward(self, x):
+        if self.positional_encoding:
+            x = self.positional_encoding(x)
+        x = self.sa_decoder(x)
+        # currently, x is [batch_size, seq_len, embed_dim]
+        x = x[:, -1, :]  # take only the last token
         for i in range(len(self.output_layers)):
             x = self.output_layers[i](x)
             x = F.relu(x)

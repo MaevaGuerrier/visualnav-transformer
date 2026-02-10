@@ -17,13 +17,10 @@ from warmup_scheduler import GradualWarmupScheduler
 from timm.utils import ModelEmaV2
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from diffusers.optimization import get_scheduler
 
-"""
-IMPORT YOUR MODEL HERE
-"""
 from vint_train.models.gnm.gnm import GNM
 from vint_train.models.vint.vint import ViNT
+from vint_train.models.vint.vint_dino import ViNTWithDINOTokens
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
@@ -63,7 +60,7 @@ def main(config):
         os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         if "gpu_ids" not in config:
             config["gpu_ids"] = [0]
-        elif type(config["gpu_ids"]) == int:
+        elif isinstance(config["gpu_ids"], int):
             config["gpu_ids"] = [config["gpu_ids"]]
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
             [str(x) for x in config["gpu_ids"]]
@@ -188,18 +185,21 @@ def main(config):
             mha_num_attention_layers=config["mha_num_attention_layers"],
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
         )
+    elif config["model_type"] == "vint_dino":
+        model = ViNTWithDINOTokens(
+            image_size=config["image_size"],
+            context_size=config["context_size"],
+            len_traj_pred=config["len_traj_pred"],
+            learn_angle=config["learn_angle"],
+            obs_encoder=config["obs_encoder"],
+            encoding_size=config["obs_encoding_size"],
+            mha_num_attention_heads=config["mha_num_attention_heads"],
+            mha_num_attention_layers=config["mha_num_attention_layers"],
+            mha_ff_dim_factor=config["mha_ff_dim_factor"],
+        )
     elif config["model_type"] == "nomad":
         if config["vision_encoder"] == "nomad_vint":
             vision_encoder = NoMaD_ViNT(
-                obs_encoding_size=config["encoding_size"],
-                context_size=config["context_size"],
-                mha_num_attention_heads=config["mha_num_attention_heads"],
-                mha_num_attention_layers=config["mha_num_attention_layers"],
-                mha_ff_dim_factor=config["mha_ff_dim_factor"],
-            )
-            vision_encoder = replace_bn_with_gn(vision_encoder)
-        elif config["vision_encoder"] == "vib": 
-            vision_encoder = ViB(
                 obs_encoding_size=config["encoding_size"],
                 context_size=config["context_size"],
                 mha_num_attention_heads=config["mha_num_attention_heads"],
@@ -241,7 +241,7 @@ def main(config):
             prediction_type='epsilon'
         )
     else:
-        raise ValueError(f"Model {config['model']} not supported")
+        raise ValueError(f"Model {config['model_type']} not supported")
 
     if config["clipping"]:
         print("Clipping gradients to", config["max_norm"])
@@ -306,7 +306,7 @@ def main(config):
     if "pretrained_weights" in config:
         pretrained_path = config["pretrained_weights"]
         print("Loading pretrained weights from ", pretrained_path)
-        pretrained_checkpoint = torch.load(pretrained_path) #map_location=f"cuda:{first_gpu_id}" if torch.cuda.is_available() else "cpu")
+        pretrained_checkpoint = torch.load(pretrained_path, weights_only=False) #map_location=f"cuda:{first_gpu_id}" if torch.cuda.is_available() else "cpu")
         load_model(model, config["model_type"], pretrained_checkpoint)
     if "ema" in config:
         print("Using EMA with decay", config["ema"])
@@ -326,14 +326,24 @@ def main(config):
 
     if "freeze_encoders" in config and config["freeze_encoders"]:
         print("Freezing vision encoder weights")
+        
+        # Handle cases where model might be wrapped (e.g. ModelEmaV2)
+        if hasattr(model, "module"):
+            model_to_freeze = model.module
+        else:
+            model_to_freeze = model
+
         if config["model_type"] == "vint":
-            for param in model.module.obs_encoder.parameters():
+            for param in model_to_freeze.obs_encoder.parameters():
                 param.requires_grad = False
         elif config["model_type"] == "gnm":
-            for param in model.module.obs_mobilenet.parameters():
+            for param in model_to_freeze.obs_mobilenet.parameters():
                 param.requires_grad = False
         elif config["model_type"] == "nomad":
-            for param in model.module.vision_encoder.parameters():
+            for param in model_to_freeze.vision_encoder.parameters():
+                param.requires_grad = False
+        elif config["model_type"] == "vint_dino":
+            for param in model_to_freeze.vision_encoder.parameters():
                 param.requires_grad = False
         else:
             raise ValueError(f"Model {config['model_type']} not supported for freezing encoders")
@@ -349,7 +359,7 @@ def main(config):
         if scheduler is not None and "scheduler" in latest_checkpoint:
             scheduler.load_state_dict(latest_checkpoint["scheduler"].state_dict())
 
-    if config["model_type"] == "vint" or config["model_type"] == "gnm": 
+    if config["model_type"] in ["gnm", "vint", "vint_dino"]:
         train_eval_loop(
             train_model=config["train"],
             model=model,
@@ -372,7 +382,7 @@ def main(config):
             use_wandb=config["use_wandb"],
             eval_fraction=config["eval_fraction"],
         )
-    else:
+    elif config["model_type"] == "nomad":
         train_eval_loop_nomad(
             train_model=config["train"],
             model=model,
@@ -396,6 +406,8 @@ def main(config):
             eval_fraction=config["eval_fraction"],
             eval_freq=config["eval_freq"],
         )
+    else:
+        raise ValueError(f"Model {config['model_type']} not supported for training")
 
     print("FINISHED TRAINING")
 
@@ -436,19 +448,19 @@ if __name__ == "__main__":
         ],  # should error if dir already exists to avoid overwriting and old project
     )
 
-    if config["use_wandb"]:
-        wandb.login()
-        wandb.init(
-            project=config["project_name"],
-            settings=wandb.Settings(start_method="fork"),
-            entity=config["wandb_entity"],
-            dir=config["wandb_dir"],
-        )
-        wandb.save(args.config, policy="now")  # save the config file
-        wandb.run.name = config["run_name"]
-        # update the wandb args with the training configurations
-        if wandb.run:
-            wandb.config.update(config)
+    wandb.login()
+    wandb.init(
+        project=config["project_name"],
+        settings=wandb.Settings(start_method="fork"),
+        entity=config["wandb_entity"],
+        dir=config["wandb_dir"],
+        mode="disabled" if not config["use_wandb"] else "online",
+    )
+    wandb.save(args.config, policy="now")  # save the config file
+    wandb.run.name = config["run_name"]
+    # update the wandb args with the training configurations
+    if wandb.run:
+        wandb.config.update(config)
 
     print(config)
     main(config)
