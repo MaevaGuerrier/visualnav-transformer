@@ -8,8 +8,8 @@ class BaseModel(nn.Module):
     def __init__(
         self,
         context_size: int = 5,
-        len_traj_pred: Optional[int] = 5,
-        learn_angle: Optional[bool] = True,
+        len_traj_pred: int = 5,
+        learn_angle: bool = True,
     ) -> None:
         """
         Base Model main class
@@ -33,7 +33,7 @@ class BaseModel(nn.Module):
         return z
 
     def forward(
-        self, obs_img: torch.tensor, goal_img: torch.tensor
+        self, obs_img: torch.Tensor, goal_img: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass of the model

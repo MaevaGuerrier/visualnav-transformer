@@ -10,14 +10,14 @@ class ViNT(BaseModel):
     def __init__(
         self,
         context_size: int = 5,
-        len_traj_pred: Optional[int] = 5,
-        learn_angle: Optional[bool] = True,
-        obs_encoder: Optional[str] = "efficientnet-b0",
-        obs_encoding_size: Optional[int] = 512,
-        late_fusion: Optional[bool] = False,
-        mha_num_attention_heads: Optional[int] = 2,
-        mha_num_attention_layers: Optional[int] = 2,
-        mha_ff_dim_factor: Optional[int] = 4,
+        len_traj_pred: int = 5,
+        learn_angle: bool = True,
+        obs_encoder: str = "efficientnet-b0",
+        obs_encoding_size: int = 512,
+        late_fusion: bool = False,
+        mha_num_attention_heads: int = 2,
+        mha_num_attention_layers: int = 2,
+        mha_ff_dim_factor: int = 4,
     ) -> None:
         """
         ViNT class: uses a Transformer-based architecture to encode (current and past) visual observations 
