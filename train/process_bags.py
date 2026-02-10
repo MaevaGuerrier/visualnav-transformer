@@ -34,6 +34,8 @@ def main(args: argparse.Namespace):
     if args.num_trajs >= 0:
         bag_files = bag_files[: args.num_trajs]
 
+    print(f"Processing {len(bag_files)} bags from {args.input_dir} to {args.output_dir}")
+
     # processing loop
     for bag_path in tqdm.tqdm(bag_files, desc="Bags processed"):
         try:
@@ -44,9 +46,9 @@ def main(args: argparse.Namespace):
             continue
 
         # name is that folders separated by _ and then the last part of the path
-        traj_name = bag_path.split("/")[-1].replace('.bag','')
+        #traj_name = bag_path.split("/")[-1].replace('.bag','')
         # Original code but failed to account for different dir structure
-        # traj_name = "_".join(bag_path.split("/")[-2:])[:-4]
+        traj_name = "_".join(bag_path.split("/")[-2:]).replace('.bag', '')
 
         # # load the hdf5 file
         bag_img_data, bag_traj_data = get_images_and_odom(
