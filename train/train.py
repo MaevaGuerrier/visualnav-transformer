@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 import yaml
 import time
-import pdb
+import re
 
 import torch
 import torch.nn as nn
@@ -37,6 +37,22 @@ from vint_train.training.train_eval_loop import (
     train_eval_loop_nomad,
     load_model,
 )
+
+
+def resolve_env_vars(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            obj[key] = resolve_env_vars(value)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            obj[i] = resolve_env_vars(item)
+    elif isinstance(obj, str):
+        pattern = re.compile(r"\$\{(\w+)\}")
+        def replace(match):
+            env_var = match.group(1)
+            return os.getenv(env_var, match.group(0))
+        return pattern.sub(replace, obj)
+    return obj
 
 
 def main(config):
@@ -408,10 +424,11 @@ if __name__ == "__main__":
         user_config = yaml.safe_load(f)
 
     config.update(user_config)
+    config = resolve_env_vars(config)
 
     config["run_name"] += "_" + time.strftime("%Y_%m_%d_%H_%M_%S")
     config["project_folder"] = os.path.join(
-        "logs", config["project_name"], config["run_name"]
+        config["log_folder"], config["project_name"], config["run_name"]
     )
     os.makedirs(
         config[
@@ -424,7 +441,8 @@ if __name__ == "__main__":
         wandb.init(
             project=config["project_name"],
             settings=wandb.Settings(start_method="fork"),
-            entity=config["wandb_entity"]
+            entity=config["wandb_entity"],
+            dir=config["wandb_dir"],
         )
         wandb.save(args.config, policy="now")  # save the config file
         wandb.run.name = config["run_name"]
