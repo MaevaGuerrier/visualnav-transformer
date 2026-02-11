@@ -8,17 +8,18 @@ log_folder: ~/scratch/vint_training/logs
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 192
-epochs: 25
+batch_size: 512
+epochs: 100
 gpu_ids: [0]
-num_workers: 12
+num_workers: 32
+prefetch_factor: 1
 lr: 5e-4
 optimizer: adamw
 clipping: False
 max_norm: 1.
 scheduler: "cosine"
 warmup: True 
-warmup_epochs: 5
+warmup_epochs: 4
 cyclic_period: 10
 plateau_patience: 3
 plateau_factor: 0.5
@@ -29,7 +30,7 @@ model_type: vint_dino
 obs_encoder: "facebook/dinov3-vits16-pretrain-lvd1689m"
 obs_encoding_size: 512
 mha_num_attention_heads: 4
-mha_num_attention_layers: 4
+mha_num_attention_layers: 6
 mha_ff_dim_factor: 4
 positional_encoding_type: "rope"
 
@@ -93,7 +94,7 @@ datasets:
     goals_per_obs: 1 # how many goals are sampled per observation
     negative_mining: True # negative mining from the ViNG paper (Shah et al.)
   sacson:
-    data_folder: ${SLURM_TMPDIR}/data/sacson/
+    data_folder: ${SLURM_TMPDIR}/data/huron/
     train: ${SLURM_TMPDIR}/data/data_splits/sacson/train
     test: ${SLURM_TMPDIR}/data/data_splits/sacson/test
     end_slack: 3 # because many trajectories end in collisions
@@ -110,7 +111,7 @@ datasets:
 # logging stuff
 ## =0 turns off
 print_log_freq: 100 # in iterations
-image_log_freq: 1000 #0 # in iterations
+image_log_freq: 0 # in iterations
 num_images_log: 8 #0 
 pairwise_test_freq: 0 # in epochs
 eval_fraction: 0.25

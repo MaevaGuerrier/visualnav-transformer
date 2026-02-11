@@ -148,8 +148,10 @@ def main(config):
         batch_size=config["batch_size"],
         shuffle=True,
         num_workers=config["num_workers"],
+        prefetch_factor=config["prefetch_factor"],
         drop_last=False,
         persistent_workers=True,
+        pin_memory=True,
     )
 
     if "eval_batch_size" not in config:
@@ -160,7 +162,9 @@ def main(config):
             dataset,
             batch_size=config["eval_batch_size"],
             shuffle=True,
-            num_workers=0,
+            num_workers=config["num_workers"],
+            pin_memory=True,
+            prefetch_factor=config["prefetch_factor"],
             drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )
 
