@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --time=01:00:00
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256000M
+#SBATCH --time=6:00:00
+#SBATCH --cpus-per-task=17
+#SBATCH --mem=128000M
 #SBATCH --account=def-beltrame
 #SBATCH --gres=gpu:h100:1
 

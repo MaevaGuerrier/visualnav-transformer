@@ -151,7 +151,7 @@ def main(config):
         num_workers=config["num_workers"],
         prefetch_factor=config["prefetch_factor"],
         drop_last=False,
-        persistent_workers=True,
+        persistent_workers=config["persistent_workers"] if "persistent_workers" in config else True,
         pin_memory=True,
     )
 

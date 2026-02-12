@@ -1,6 +1,6 @@
 project_name: vint-release
 run_name: vint-5c
-freeze_encoders: True
+freeze_encoders: False
 wandb_entity: kobakos
 wandb_dir: ./wandb
 log_folder: ./logs
@@ -8,11 +8,12 @@ log_folder: ./logs
 # training setup
 use_wandb: False # set to false if you don't want to log to wandb
 train: True
-batch_size: 192
+batch_size: 32
 epochs: 10
 gpu_ids: [0]
 num_workers: 12
 prefetch_factor: 2
+persistent_workers: False
 lr: 1.0e-3
 lr_dino_mult: 0.1
 optimizer: adamw
