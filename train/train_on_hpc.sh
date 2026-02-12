@@ -9,11 +9,11 @@
 module load opencv/4.10.0
 module load python/3.10.13
 python -m venv $SLURM_TMPDIR/.venv
+source $SLURM_TMPDIR/.venv/bin/activate
 python -m pip install -r requirements.txt
 cd ../../../third_party/diffusion_policy/
 python -m pip install .
 cd -
-source $SLURM_TMPDIR/.venv/bin/activate
 
 mkdir $SLURM_TMPDIR/data
 INPUT_DIR="/home/koki/projects/def-beltrame/vnm_datasets/processed_datasets"
