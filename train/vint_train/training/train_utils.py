@@ -129,7 +129,7 @@ def _log_data(
                 print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
         else:
             data_log[logger.full_name()] = logger.average()
-            if i % print_log_freq == 0 and print_log_freq != 0:
+            if print_log_freq != 0 and i % print_log_freq == 0:
                 print(f"(epoch {epoch}) {logger.full_name()} {logger.average()}")
 
     if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
