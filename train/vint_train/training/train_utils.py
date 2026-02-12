@@ -24,6 +24,8 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
 
+from timm.scheduler import CosineLRScheduler
+
 # LOAD DATA CONFIG
 with open(os.path.join(os.path.dirname(__file__), "../data/data_config.yaml"), "r") as f:
     data_config = yaml.safe_load(f)
@@ -125,7 +127,7 @@ def _log_data(
     for key, logger in loggers.items():
         if use_latest:
             data_log[logger.full_name()] = logger.latest()
-            if i % print_log_freq == 0 and print_log_freq != 0:
+            if print_log_freq != 0 and i % print_log_freq == 0:
                 print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
         else:
             data_log[logger.full_name()] = logger.average()
@@ -172,6 +174,7 @@ def train(
     project_folder: str,
     normalized: bool,
     epoch: int,
+    scheduler: Optional[CosineLRScheduler] = None,
     alpha: float = 0.5,
     learn_angle: bool = True,
     print_log_freq: int = 100,
@@ -276,6 +279,9 @@ def train(
 
         losses["total_loss"].backward()
         optimizer.step()
+
+        if scheduler is not None and isinstance(scheduler, CosineLRScheduler):
+            scheduler.step(epoch + i / num_batches)
 
         for key, value in losses.items():
             if key in loggers:
@@ -533,6 +539,7 @@ def train_nomad(
     goal_mask_prob: float,
     project_folder: str,
     epoch: int,
+    scheduler: Optional[CosineLRScheduler] = None,
     alpha: float = 1e-4,
     print_log_freq: int = 100,
     wandb_log_freq: int = 10,
@@ -659,6 +666,9 @@ def train_nomad(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+            if scheduler is not None and isinstance(scheduler, CosineLRScheduler):
+                scheduler.step(epoch + i / num_batches)
 
             # Update Exponential Moving Average of the model weights
             ema_model.step(model)

@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torchvision import transforms
 
+from timm.scheduler import CosineLRScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.training_utils import EMAModel
 
@@ -81,6 +82,7 @@ def train_eval_loop(
                 project_folder=project_folder,
                 normalized=normalized,
                 epoch=epoch,
+                scheduler=scheduler if isinstance(scheduler, CosineLRScheduler) else None,
                 alpha=alpha,
                 learn_angle=learn_angle,
                 print_log_freq=print_log_freq,
@@ -129,6 +131,8 @@ def train_eval_loop(
             # scheduler calls based on the type of scheduler
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(np.mean(avg_total_test_loss))
+            elif isinstance(scheduler, CosineLRScheduler):
+                pass # stepped per iteration in train function
             else:
                 scheduler.step()
         wandb.log({
@@ -211,6 +215,7 @@ def train_eval_loop_nomad(
                 goal_mask_prob=goal_mask_prob,
                 project_folder=project_folder,
                 epoch=epoch,
+                scheduler=lr_scheduler if isinstance(lr_scheduler, CosineLRScheduler) else None,
                 print_log_freq=print_log_freq,
                 wandb_log_freq=wandb_log_freq,
                 image_log_freq=image_log_freq,
@@ -219,7 +224,10 @@ def train_eval_loop_nomad(
                 alpha=alpha,
             )
             if lr_scheduler is not None:
-                lr_scheduler.step()
+                if isinstance(lr_scheduler, CosineLRScheduler):
+                    pass # stepped per iteration in train_nomad
+                else:
+                    lr_scheduler.step()
 
         numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
         torch.save(ema_model.averaged_model.state_dict(), numbered_path)
@@ -269,7 +277,10 @@ def train_eval_loop_nomad(
         }, commit=False)
 
         if lr_scheduler is not None:
-            lr_scheduler.step()
+            if isinstance(lr_scheduler, CosineLRScheduler):
+                pass # stepped per iteration in train_nomad
+            else:
+                lr_scheduler.step()
 
         # log average eval loss
         wandb.log({}, commit=False)

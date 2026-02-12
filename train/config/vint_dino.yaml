@@ -6,20 +6,23 @@ wandb_dir: ./wandb
 log_folder: ./logs
 
 # training setup
-use_wandb: True # set to false if you don't want to log to wandb
+use_wandb: False # set to false if you don't want to log to wandb
 train: True
 batch_size: 192
 epochs: 10
 gpu_ids: [0]
 num_workers: 12
 prefetch_factor: 2
-lr: 5e-4
+lr: 1.0e-3
+lr_dino_mult: 0.1
 optimizer: adamw
 clipping: False
 max_norm: 1.
-scheduler: "cosine"
+scheduler: "cosine_timm"
 warmup: True 
-warmup_epochs: 2
+warmup_epochs: 3
+lr_min: 1.0e-6
+warmup_lr_init: 1.0e-5
 cyclic_period: 10
 plateau_patience: 3
 plateau_factor: 0.5

@@ -15,6 +15,7 @@ import torch.backends.cudnn as cudnn
 from warmup_scheduler import GradualWarmupScheduler
 
 from timm.utils import ModelEmaV2
+from timm.scheduler import CosineLRScheduler
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
@@ -247,6 +248,11 @@ def main(config):
     else:
         raise ValueError(f"Model {config['model_type']} not supported")
 
+    # Multi-GPU
+    if len(config["gpu_ids"]) > 1:
+        model = nn.DataParallel(model, device_ids=config["gpu_ids"])
+    model = model.to(device)
+
     if config["clipping"]:
         print("Clipping gradients to", config["max_norm"])
         for p in model.parameters():
@@ -260,12 +266,24 @@ def main(config):
 
     lr = float(config["lr"])
     config["optimizer"] = config["optimizer"].lower()
+    params = model.parameters()
+    if config["model_type"] == "vint_dino" and "lr_dino_mult" in config:
+        print("Using different lr for dino encoder with multiplier", config["lr_dino_mult"])
+
+        dino_params = list(model.vision_encoder.parameters())
+        dino_param_ids = {id(p) for p in dino_params}
+        other_params = [p for p in model.parameters() if id(p) not in dino_param_ids]
+
+        params = [
+            {"params": other_params},
+            {"params": dino_params, "lr": lr * config["lr_dino_mult"]},
+        ]
     if config["optimizer"] == "adam":
-        optimizer = Adam(model.parameters(), lr=lr, betas=(0.9, 0.98))
+        optimizer = Adam(params, lr=lr, betas=(0.9, 0.98))
     elif config["optimizer"] == "adamw":
-        optimizer = AdamW(model.parameters(), lr=lr)
+        optimizer = AdamW(params, lr=lr)
     elif config["optimizer"] == "sgd":
-        optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+        optimizer = torch.optim.SGD(params, lr=lr, momentum=0.9)
     else:
         raise ValueError(f"Optimizer {config['optimizer']} not supported")
 
@@ -276,6 +294,17 @@ def main(config):
             print("Using cosine annealing with T_max", config["epochs"])
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=config["epochs"]
+            )
+        elif config["scheduler"] == "cosine_timm":
+            print("Using cosine annealing with warmup from timm")
+            scheduler = CosineLRScheduler(
+                optimizer,
+                t_initial=config["epochs"],
+                lr_min=config.get("lr_min", lr / 100),
+                warmup_t=config.get("warmup_epochs", 0),
+                warmup_lr_init=config.get("warmup_lr_init", lr / 100),
+                cycle_mul=1,
+                cycle_decay=1,
             )
         elif config["scheduler"] == "cyclic":
             print("Using cyclic LR with cycle", config["cyclic_period"])
@@ -297,7 +326,7 @@ def main(config):
         else:
             raise ValueError(f"Scheduler {config['scheduler']} not supported")
 
-        if config["warmup"]:
+        if config["warmup"] and config["scheduler"] != "cosine_timm":
             print("Using warmup scheduler")
             scheduler = GradualWarmupScheduler(
                 optimizer,
@@ -351,11 +380,6 @@ def main(config):
                 param.requires_grad = False
         else:
             raise ValueError(f"Model {config['model_type']} not supported for freezing encoders")
-
-    # Multi-GPU
-    if len(config["gpu_ids"]) > 1:
-        model = nn.DataParallel(model, device_ids=config["gpu_ids"])
-    model = model.to(device)
 
     if "load_run" in config:  # load optimizer and scheduler after data parallel
         if "optimizer" in latest_checkpoint:
