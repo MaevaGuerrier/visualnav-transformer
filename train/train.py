@@ -8,7 +8,7 @@ import re
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset, Subset
 from torch.optim import Adam, AdamW
 from torchvision import transforms
 import torch.backends.cudnn as cudnn
@@ -144,6 +144,10 @@ def main(config):
     # combine all the datasets from different robots
     train_dataset = ConcatDataset(train_dataset)
 
+    if args.debug:
+        train_dataset = Subset(train_dataset, list(range(2*config["batch_size"])))
+        config["epochs"] = 2
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config["batch_size"],
@@ -159,13 +163,16 @@ def main(config):
         config["eval_batch_size"] = config["batch_size"]
 
     for dataset_type, dataset in test_dataloaders.items():
+        if args.debug:
+            dataset = Subset(dataset, list(range(2*config["eval_batch_size"])))
         test_dataloaders[dataset_type] = DataLoader(
             dataset,
             batch_size=config["eval_batch_size"],
             shuffle=True,
-            num_workers=config["num_workers"],
+            #num_workers=config["num_workers"],
+            num_workers =0, # To avoid OOM
             pin_memory=True,
-            prefetch_factor=config["prefetch_factor"],
+            #prefetch_factor=config["prefetch_factor"],
             drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )
 
@@ -452,6 +459,11 @@ if __name__ == "__main__":
         default="config/vint.yaml",
         type=str,
         help="Path to the config file in train_config folder",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="If set, will use a smaller subset of the data and fewer epochs for quick testing",
     )
     args = parser.parse_args()
 
