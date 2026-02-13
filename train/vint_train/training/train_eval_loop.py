@@ -1,5 +1,6 @@
 import wandb
 import os
+import gc
 import numpy as np
 from typing import List, Optional, Dict
 from prettytable import PrettyTable
@@ -92,6 +93,9 @@ def train_eval_loop(
                 use_wandb=use_wandb,
             )
 
+        gc.collect()
+        torch.cuda.empty_cache()
+
         avg_total_test_loss = []
         for dataset_type in test_dataloaders:
             print(
@@ -143,6 +147,11 @@ def train_eval_loop(
         numbered_path = os.path.join(project_folder, f"{epoch}.pth")
         torch.save(checkpoint, latest_path)
         torch.save(checkpoint, numbered_path)  # keep track of model at every epoch
+
+        # Flush wandb and collect garbage
+        wandb.log({}, commit=True)
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Flush the last set of eval logs
     wandb.log({})
@@ -249,6 +258,9 @@ def train_eval_loop_nomad(
         latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
         torch.save(lr_scheduler.state_dict() if lr_scheduler is not None else None, latest_scheduler_path)
 
+        gc.collect()
+        torch.cuda.empty_cache()
+
 
         if (epoch + 1) % eval_freq == 0: 
             for dataset_type in test_dataloaders:
@@ -272,9 +284,6 @@ def train_eval_loop_nomad(
                     use_wandb=use_wandb,
                     eval_fraction=eval_fraction,
                 )
-        wandb.log({
-            "lr": optimizer.param_groups[0]["lr"],
-        }, commit=False)
 
         if lr_scheduler is not None:
             if isinstance(lr_scheduler, CosineLRScheduler):
@@ -282,12 +291,13 @@ def train_eval_loop_nomad(
             else:
                 lr_scheduler.step()
 
-        # log average eval loss
-        wandb.log({}, commit=False)
-
+        # log average eval loss and flush wandb
         wandb.log({
             "lr": optimizer.param_groups[0]["lr"],
-        }, commit=False)
+        }, commit=True)
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
         
     # Flush the last set of eval logs
