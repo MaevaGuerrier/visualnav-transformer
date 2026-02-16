@@ -155,8 +155,8 @@ def main(config):
         num_workers=config["num_workers"],
         prefetch_factor=config["prefetch_factor"],
         drop_last=False,
-        persistent_workers=config["persistent_workers"] if "persistent_workers" in config else True,
-        pin_memory=True,
+        persistent_workers=True,
+        pin_memory=True
     )
 
     if "eval_batch_size" not in config:
@@ -171,7 +171,7 @@ def main(config):
             shuffle=True,
             #num_workers=config["num_workers"],
             num_workers =0, # To avoid OOM
-            pin_memory=True,
+            persistent_workers=False,
             #prefetch_factor=config["prefetch_factor"],
             drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
         )

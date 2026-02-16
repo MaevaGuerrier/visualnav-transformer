@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --time=6:00:00
+#SBATCH --time=7:00:00
 #SBATCH --cpus-per-task=17
-#SBATCH --mem=128000M
+#SBATCH --mem=64000M
 #SBATCH --account=def-beltrame
 #SBATCH --gres=gpu:h100:1
 
@@ -57,4 +57,4 @@ python data_split.py\
     -o $SLURM_TMPDIR/data/data_splits \
     --seed 3045
 
-python train.py --config config/vint_dino_hpc.yaml
+python train.py --config config/vint_dino_fp_hpc.yaml
