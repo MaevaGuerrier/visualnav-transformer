@@ -145,8 +145,10 @@ def main(config):
     train_dataset = ConcatDataset(train_dataset)
 
     if args.debug:
-        train_dataset = Subset(train_dataset, list(range(2*config["batch_size"])))
-        config["epochs"] = 2
+        # Use enough to fill up the dataloader workers and prefetch, but not more to avoid long training time during debugging
+        train_dataset = Subset(train_dataset, list(range(
+            2*config["batch_size"]*config['num_workers']*config["prefetch_factor"]
+        )))
 
     train_loader = DataLoader(
         train_dataset,
