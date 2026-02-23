@@ -185,7 +185,10 @@ class ViNT_Dataset(Dataset):
                             txn.put(image_path.encode(), f.read())
 
         # Reopen the cache file in read-only mode
-        self._image_cache: lmdb.Environment = lmdb.open(cache_filename, readonly=True)
+        #self._image_cache: lmdb.Environment = lmdb.open(cache_filename, readonly=True)
+        # wait until forked to open lmdb
+        self.cache_filename = cache_filename
+        self._image_cache = None
 
     def _build_index(self, use_tqdm: bool = False):
         """
@@ -247,16 +250,27 @@ class ViNT_Dataset(Dataset):
                 pickle.dump((self.index_to_data, self.goals_index), f)
 
     def _load_image(self, trajectory_name, time):
+        if self._image_cache is None:
+            self._image_cache = lmdb.open(
+                self.cache_filename, 
+                readonly=True, 
+                lock=False,
+                meminit=False
+            )
+
         image_path = get_data_path(self.data_folder, trajectory_name, time)
 
         try:
             with self._image_cache.begin() as txn:
                 image_buffer = txn.get(image_path.encode())
+                if image_buffer is None:
+                    raise TypeError(f"Image not found in cache: {image_path}")
                 image_bytes = bytes(image_buffer)
-            image_bytes = io.BytesIO(image_bytes)
-            return img_path_to_data(image_bytes, self.image_size)
-        except TypeError:
-            print(f"Failed to load image {image_path}")
+            
+            with io.BytesIO(image_bytes) as f:
+                return img_path_to_data(f, self.image_size)
+        except TypeError as e:
+            print(f"Failed to load image {image_path}: {e}")
 
     def _compute_actions(self, traj_data, curr_time, goal_time):
         start_index = curr_time
