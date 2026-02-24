@@ -7,9 +7,9 @@ from prettytable import PrettyTable
 import tqdm
 import itertools
 
-from vint_train.visualizing.action_utils import visualize_traj_pred, plot_trajs_and_points
+from vint_train.visualizing.action_utils import visualize_traj_pred, plot_trajs_and_points, compare_waypoints_pred_to_label
 from vint_train.visualizing.distance_utils import visualize_dist_pred
-from vint_train.visualizing.visualize_utils import to_numpy, from_numpy
+from vint_train.visualizing.visualize_utils import to_numpy, from_numpy, numpy_to_img, RED, GREEN, CYAN, MAGENTA
 from vint_train.training.logger import Logger
 from vint_train.data.data_utils import VISUALIZATION_IMAGE_SIZE
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
@@ -43,10 +43,13 @@ def _compute_losses(
     alpha: float,
     learn_angle: bool,
     action_mask: torch.Tensor = None,
+    return_per_sample: bool = False,
 ):
     """
     Compute losses for distance and action prediction.
 
+    Args:
+        return_per_sample: if True, also return per-sample total losses
     """
     dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
 
@@ -56,6 +59,13 @@ def _compute_losses(
             unreduced_loss = unreduced_loss.mean(dim=-1)
         assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
         return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
+
+    def action_reduce_per_sample(unreduced_loss: torch.Tensor):
+        # Reduce over non-batch dimensions to get loss per batch element
+        while unreduced_loss.dim() > 1:
+            unreduced_loss = unreduced_loss.mean(dim=-1)
+        assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
+        return (unreduced_loss * action_mask) / (action_mask.mean() + 1e-2)
 
     # Mask out invalid inputs (for negatives, or when the distance between obs and goal is large)
     assert action_pred.shape == action_label.shape, f"{action_pred.shape} != {action_label.shape}"
@@ -92,6 +102,13 @@ def _compute_losses(
 
     total_loss = alpha * 1e-2 * dist_loss + (1 - alpha) * action_loss
     results["total_loss"] = total_loss
+
+    if return_per_sample:
+        # Compute per-sample losses for high-loss detection
+        dist_loss_per_sample = F.mse_loss(dist_pred.squeeze(-1), dist_label.float(), reduction='none')
+        action_loss_per_sample = action_reduce_per_sample(F.mse_loss(action_pred, action_label, reduction="none"))
+        total_loss_per_sample = alpha * 1e-2 * dist_loss_per_sample + (1 - alpha) * action_loss_per_sample
+        results["total_loss_per_sample"] = total_loss_per_sample
 
     return results
 
@@ -165,6 +182,92 @@ def _log_data(
         )
 
 
+def _log_high_loss_samples(
+    obs_images: torch.Tensor,
+    goal_images: torch.Tensor,
+    action_pred: torch.Tensor,
+    action_label: torch.Tensor,
+    dist_pred: torch.Tensor,
+    dist_label: torch.Tensor,
+    total_loss_per_sample: torch.Tensor,
+    high_loss_indices: torch.Tensor,
+    dataset_index: torch.Tensor,
+    epoch: int,
+    batch_idx: int,
+    project_folder: str,
+    normalized: bool,
+    mode: str = "train",
+    max_samples: int = 10,
+    use_wandb: bool = True,
+):
+    """
+    Log samples with unusually high loss for debugging.
+    Uses existing visualization utilities from vint_train.visualizing.
+    """
+    num_to_log = min(len(high_loss_indices), max_samples)
+    log_dir = os.path.join(project_folder, f"high_loss_{mode}")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Convert tensors to numpy for visualization
+    obs_images_np = to_numpy(obs_images)
+    goal_images_np = to_numpy(goal_images)
+    action_pred_np = to_numpy(action_pred)
+    action_label_np = to_numpy(action_label)
+    dataset_index_np = to_numpy(dataset_index)
+    
+    # Denormalize images (undo ImageNet normalization)
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    if obs_images_np.shape[1] > 3:
+        # If there are multiple observation images concatenated, only denormalize the last 3 channels (the most recent observation)
+        obs_images_np = obs_images_np[:, -3:, :, :]
+    obs_images_np = obs_images_np * std[None, :, None, None] + mean[None, :, None, None]
+    goal_images_np = goal_images_np * std[None, :, None, None] + mean[None, :, None, None]
+    obs_images_np = np.clip(obs_images_np, 0, 1)
+    goal_images_np = np.clip(goal_images_np, 0, 1)
+    
+    wandb_list = []
+    
+    for idx_in_batch, sample_idx in enumerate(high_loss_indices[:num_to_log]):
+        sample_idx = sample_idx.item()
+        loss_value = total_loss_per_sample[sample_idx].item()
+        
+        # Get data for this sample
+        obs_img = obs_images_np[sample_idx]
+        goal_img = goal_images_np[sample_idx]
+        pred_waypoints = action_pred_np[sample_idx]
+        label_waypoints = action_label_np[sample_idx]
+        dataset_idx = int(dataset_index_np[sample_idx])
+        
+        # Get dataset name from data_config (already loaded at module level)
+        dataset_names = sorted(list(data_config.keys()))
+        dataset_name = dataset_names[dataset_idx] if dataset_idx < len(dataset_names) else "unknown"
+        
+        # Use existing visualization function
+        save_path = os.path.join(log_dir, f"epoch{epoch}_batch{batch_idx}_sample{sample_idx}_loss{loss_value:.4f}.png")
+        
+        compare_waypoints_pred_to_label(
+            obs_img=numpy_to_img(obs_img),
+            goal_img=numpy_to_img(goal_img),
+            dataset_name=dataset_name,
+            goal_pos=np.array([0, 0]),  # Placeholder, actual goal pos not directly available
+            pred_waypoints=pred_waypoints,
+            label_waypoints=label_waypoints,
+            save_path=save_path,
+            display=False,
+        )
+        
+        if use_wandb:
+            wandb_list.append(wandb.Image(save_path, caption=f"Loss: {loss_value:.4f}"))
+    
+    # Log all high-loss samples to wandb at once
+    if use_wandb and wandb_list:
+        wandb.log({
+            f"{mode}/high_loss_samples": wandb_list,
+            f"{mode}/high_loss_count": len(wandb_list),
+            f"{mode}/high_loss_threshold": total_loss_per_sample[high_loss_indices[0]].item(),
+        }, commit=False)
+
 def train(
     model: nn.Module,
     optimizer: Adam,
@@ -183,6 +286,9 @@ def train(
     num_images_log: int = 8,
     use_wandb: bool = True,
     use_tqdm: bool = True,
+    log_high_loss_samples: bool = False,
+    high_loss_threshold: float = 10.0,
+    max_high_loss_samples: int = 10,
 ):
     """
     Train the model for one epoch.
@@ -202,6 +308,9 @@ def train(
         num_images_log: number of images to log
         use_wandb: whether to use wandb
         use_tqdm: whether to use tqdm
+        log_high_loss_samples: whether to log samples with high loss
+        high_loss_threshold: threshold for considering a loss as high
+        max_high_loss_samples: maximum number of high loss samples to log
     """
     model.train()
     dist_loss_logger = Logger("dist_loss", "train", window_size=print_log_freq)
@@ -275,7 +384,34 @@ def train(
             alpha=alpha,
             learn_angle=learn_angle,
             action_mask=action_mask,
+            return_per_sample=log_high_loss_samples,
         )
+
+        # Log high-loss samples if enabled
+        if log_high_loss_samples and "total_loss_per_sample" in losses:
+            total_loss_per_sample = losses["total_loss_per_sample"]
+            high_loss_mask = total_loss_per_sample > high_loss_threshold
+            if high_loss_mask.any():
+                high_loss_indices = torch.where(high_loss_mask)[0]
+                print(f"[Epoch {epoch} Batch {i}] Found {len(high_loss_indices)} high-loss samples (threshold: {high_loss_threshold})")
+                _log_high_loss_samples(
+                    obs_images=obs_image,
+                    goal_images=goal_image,
+                    action_pred=action_pred,
+                    action_label=action_label,
+                    dist_pred=dist_pred,
+                    dist_label=dist_label,
+                    total_loss_per_sample=total_loss_per_sample,
+                    high_loss_indices=high_loss_indices,
+                    dataset_index=dataset_index,
+                    epoch=epoch,
+                    batch_idx=i,
+                    project_folder=project_folder,
+                    normalized=normalized,
+                    mode="train",
+                    max_samples=max_high_loss_samples,
+                    use_wandb=use_wandb,
+                )
 
         losses["total_loss"].backward()
         optimizer.step()
@@ -327,7 +463,6 @@ def evaluate(
     num_images_log: int = 8,
     use_wandb: bool = True,
     eval_fraction: float = 1.0,
-    use_tqdm: bool = True,
 
 ):
     """
@@ -528,6 +663,102 @@ def _compute_losses_nomad(
     return results
 
 
+def _log_high_loss_samples_nomad(
+    obs_images: torch.Tensor,
+    goal_images: torch.Tensor,
+    actions: torch.Tensor,
+    distance: torch.Tensor,
+    dist_pred: torch.Tensor,
+    diffusion_loss_per_sample: torch.Tensor,
+    high_loss_indices: torch.Tensor,
+    dataset_idx: torch.Tensor,
+    epoch: int,
+    batch_idx: int,
+    project_folder: str,
+    mode: str = "train",
+    max_samples: int = 10,
+    use_wandb: bool = True,
+):
+    """
+    Log NoMaD samples with unusually high loss for debugging.
+    Uses existing visualization utilities from vint_train.visualizing.
+    """
+    num_to_log = min(len(high_loss_indices), max_samples)
+    log_dir = os.path.join(project_folder, f"high_loss_{mode}")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Convert tensors to numpy for visualization
+    obs_images_np = to_numpy(obs_images)
+    goal_images_np = to_numpy(goal_images)
+    actions_np = to_numpy(actions)
+    
+    # Denormalize images (undo ImageNet normalization) - take last 3 channels for obs
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    
+    # For obs_images, take the last 3 channels (most recent observation)
+    if obs_images_np.shape[1] > 3:
+        obs_images_np = obs_images_np[:, -3:, :, :]
+    obs_images_np = obs_images_np * std[None, :, None, None] + mean[None, :, None, None]
+    goal_images_np = goal_images_np * std[None, :, None, None] + mean[None, :, None, None]
+    obs_images_np = np.clip(obs_images_np, 0, 1)
+    goal_images_np = np.clip(goal_images_np, 0, 1)
+    
+    wandb_list = []
+    
+    for idx_in_batch, sample_idx in enumerate(high_loss_indices[:num_to_log]):
+        sample_idx = sample_idx.item()
+        loss_value = diffusion_loss_per_sample[sample_idx].item()
+        
+        # Get images and actions for this sample
+        obs_img = obs_images_np[sample_idx]
+        goal_img = goal_images_np[sample_idx]
+        action_traj = actions_np[sample_idx]
+        
+        # Create figure with subplots using matplotlib
+        fig, axes = plt.subplots(1, 3, figsize=(18.5, 10.5))
+        
+        # Plot action trajectory in first subplot using existing utility
+        start_pos = np.array([0, 0])
+        plot_trajs_and_points(
+            axes[0],
+            [action_traj],
+            [start_pos],
+            traj_colors=[CYAN],
+            point_colors=[GREEN],
+            traj_labels=["actions"],
+            point_labels=["robot"],
+        )
+        axes[0].set_title(f"Action Trajectory (Loss: {loss_value:.4f})")
+        
+        # Show observation image using numpy_to_img
+        obs_pil = numpy_to_img(obs_img)
+        axes[1].imshow(obs_pil)
+        axes[1].set_title("Observation")
+        axes[1].axis('off')
+        
+        # Show goal image using numpy_to_img
+        goal_pil = numpy_to_img(goal_img)
+        axes[2].imshow(goal_pil)
+        axes[2].set_title("Goal")
+        axes[2].axis('off')
+        
+        # Save figure
+        save_path = os.path.join(log_dir, f"epoch{epoch}_batch{batch_idx}_sample{sample_idx}_loss{loss_value:.4f}.png")
+        fig.savefig(save_path, bbox_inches='tight')
+        plt.close(fig)
+        
+        if use_wandb:
+            wandb_list.append(wandb.Image(save_path, caption=f"Loss: {loss_value:.4f}"))
+    
+    # Log all high-loss samples to wandb at once
+    if use_wandb and wandb_list:
+        wandb.log({
+            f"{mode}/high_loss_samples": wandb_list,
+            f"{mode}/high_loss_count": len(wandb_list),
+            f"{mode}/high_loss_threshold": diffusion_loss_per_sample[high_loss_indices[0]].item(),
+        }, commit=False)
+
 def train_nomad(
     model: nn.Module,
     ema_model: EMAModel,
@@ -546,6 +777,9 @@ def train_nomad(
     image_log_freq: int = 1000,
     num_images_log: int = 8,
     use_wandb: bool = True,
+    log_high_loss_samples: bool = False,
+    high_loss_threshold: float = 10.0,
+    max_high_loss_samples: int = 10,
 ):
     """
     Train the model for one epoch.
@@ -565,6 +799,9 @@ def train_nomad(
         image_log_freq: how often to log images
         num_images_log: number of images to log
         use_wandb: whether to use wandb
+        log_high_loss_samples: whether to log samples with high loss
+        high_loss_threshold: threshold for considering a loss as high
+        max_high_loss_samples: maximum number of high loss samples to log
     """
     goal_mask_prob = torch.clip(torch.tensor(goal_mask_prob), 0, 1)
     model.train()
@@ -656,8 +893,40 @@ def train_nomad(
                 assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
                 return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
 
+            def action_reduce_per_sample(unreduced_loss: torch.Tensor):
+                # Reduce over non-batch dimensions to get loss per batch element
+                while unreduced_loss.dim() > 1:
+                    unreduced_loss = unreduced_loss.mean(dim=-1)
+                assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
+                return (unreduced_loss * action_mask) / (action_mask.mean() + 1e-2)
+
             # L2 loss
-            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+            diffusion_loss_full = F.mse_loss(noise_pred, noise, reduction="none")
+            diffusion_loss = action_reduce(diffusion_loss_full)
+            
+            # Compute per-sample losses for high-loss detection
+            if log_high_loss_samples:
+                diffusion_loss_per_sample = action_reduce_per_sample(diffusion_loss_full)
+                high_loss_mask = diffusion_loss_per_sample > high_loss_threshold
+                if high_loss_mask.any():
+                    high_loss_indices = torch.where(high_loss_mask)[0]
+                    print(f"[Epoch {epoch} Batch {i}] Found {len(high_loss_indices)} high-loss samples (threshold: {high_loss_threshold})")
+                    _log_high_loss_samples_nomad(
+                        obs_images=batch_obs_images,
+                        goal_images=batch_goal_images,
+                        actions=actions,
+                        distance=distance,
+                        dist_pred=dist_pred,
+                        diffusion_loss_per_sample=diffusion_loss_per_sample,
+                        high_loss_indices=high_loss_indices,
+                        dataset_idx=dataset_idx,
+                        epoch=epoch,
+                        batch_idx=i,
+                        project_folder=project_folder,
+                        mode="train",
+                        max_samples=max_high_loss_samples,
+                        use_wandb=use_wandb,
+                    )
             
             # Total loss
             loss = alpha * dist_loss + (1-alpha) * diffusion_loss

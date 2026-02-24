@@ -40,6 +40,10 @@ def train_eval_loop(
     learn_angle: bool = True,
     use_wandb: bool = True,
     eval_fraction: float = 0.25,
+    log_high_loss_samples: bool = False,
+    ignore_high_loss_epochs: int = 0,
+    high_loss_threshold: float = 10.0,
+    max_high_loss_samples: int = 10,
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -65,6 +69,10 @@ def train_eval_loop(
         learn_angle: whether to learn the angle or not
         use_wandb: whether to log to wandb or not
         eval_fraction: fraction of training data to use for evaluation
+        log_high_loss_samples: whether to log samples with high loss
+        ignore_high_loss_epochs: number of initial epochs to ignore when logging high loss samples (to avoid logging uninformative samples early in training)
+        high_loss_threshold: threshold for considering a loss as high
+        max_high_loss_samples: maximum number of high loss samples to log per epoch
     """
     assert 0 <= alpha <= 1
     latest_path = os.path.join(project_folder, f"latest.pth")
@@ -91,6 +99,9 @@ def train_eval_loop(
                 image_log_freq=image_log_freq,
                 num_images_log=num_images_log,
                 use_wandb=use_wandb,
+                log_high_loss_samples=log_high_loss_samples and epoch >= ignore_high_loss_epochs,
+                high_loss_threshold=high_loss_threshold,
+                max_high_loss_samples=max_high_loss_samples,
             )
 
         gc.collect()
@@ -179,6 +190,10 @@ def train_eval_loop_nomad(
     use_wandb: bool = True,
     eval_fraction: float = 0.25,
     eval_freq: int = 1,
+    log_high_loss_samples: bool = False,
+    ignore_high_loss_epochs: int = 0,
+    high_loss_threshold: float = 10.0,
+    max_high_loss_samples: int = 10,
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -204,6 +219,10 @@ def train_eval_loop_nomad(
         use_wandb: whether to log to wandb or not
         eval_fraction: fraction of training data to use for evaluation
         eval_freq: frequency of evaluation
+        log_high_loss_samples: whether to log samples with high loss
+        ignore_high_loss_epochs: number of initial epochs to ignore when logging high loss samples (to avoid logging uninformative samples early in training)
+        high_loss_threshold: threshold for considering a loss as high
+        max_high_loss_samples: maximum number of high loss samples to log per epoch
     """
     latest_path = os.path.join(project_folder, f"latest.pth")
     ema_model = EMAModel(model=model,power=0.75)
@@ -231,6 +250,9 @@ def train_eval_loop_nomad(
                 num_images_log=num_images_log,
                 use_wandb=use_wandb,
                 alpha=alpha,
+                log_high_loss_samples=log_high_loss_samples and epoch >= ignore_high_loss_epochs,
+                high_loss_threshold=high_loss_threshold,
+                max_high_loss_samples=max_high_loss_samples,
             )
             if lr_scheduler is not None:
                 if isinstance(lr_scheduler, CosineLRScheduler):

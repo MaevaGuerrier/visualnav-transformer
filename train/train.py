@@ -418,6 +418,10 @@ def main(config):
             alpha=config["alpha"],
             use_wandb=config["use_wandb"],
             eval_fraction=config["eval_fraction"],
+            log_high_loss_samples=config.get("log_high_loss_samples", False),
+            ignore_high_loss_epochs=config.get("ignore_high_loss_epochs", 0),
+            high_loss_threshold=config.get("high_loss_threshold", 10.0),
+            max_high_loss_samples=config.get("max_high_loss_samples", 10),
         )
     elif config["model_type"] == "nomad":
         train_eval_loop_nomad(
@@ -442,6 +446,10 @@ def main(config):
             use_wandb=config["use_wandb"],
             eval_fraction=config["eval_fraction"],
             eval_freq=config["eval_freq"],
+            log_high_loss_samples=config.get("log_high_loss_samples", False),
+            ignore_high_loss_epochs=config.get("ignore_high_loss_epochs", 0),
+            high_loss_threshold=config.get("high_loss_threshold", 10.0),
+            max_high_loss_samples=config.get("max_high_loss_samples", 10),
         )
     else:
         raise ValueError(f"Model {config['model_type']} not supported for training")
