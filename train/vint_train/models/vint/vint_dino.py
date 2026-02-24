@@ -56,6 +56,7 @@ class ViNTWithDINOTokens(BaseModel):
         mha_num_attention_heads: int = 2,
         mha_num_attention_layers: int = 4,
         mha_ff_dim_factor: int = 4,
+        output_layers: List[int] = [256, 128, 64, 32],
         positional_encoding_type: str = "peg",
     ) -> None:
         super(ViNTWithDINOTokens, self).__init__(context_size, len_traj_pred, learn_angle)
@@ -105,7 +106,7 @@ class ViNTWithDINOTokens(BaseModel):
         self.decoder = LastTokenMultiLayerDecoder(
             embed_dim=self.encoding_size,
             seq_len=(self.context_size+1)*(self.image_size[0]//self.patch_size//2)*(self.image_size[1]//self.patch_size//2)+1,
-            output_layers=[256, 128, 64, 32],
+            output_layers=output_layers,
             nhead=mha_num_attention_heads,
             num_layers=mha_num_attention_layers,
             ff_dim_factor=mha_ff_dim_factor,

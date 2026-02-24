@@ -1,20 +1,19 @@
-project_name: vint-release
+project_name: vint-dino
 run_name: vint-5c
-freeze_encoders: False
+freeze_encoders: True
 wandb_entity: kobakos
 wandb_dir: ./wandb
 log_folder: ./logs
 
 # training setup
-use_wandb: False # set to false if you don't want to log to wandb
+use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 32
-epochs: 10
+batch_size: 256
+epochs: 20
 gpu_ids: [0]
-num_workers: 12
-prefetch_factor: 2
-persistent_workers: False
-lr: 1.0e-3
+num_workers: 6
+prefetch_factor: 1
+lr: 3.0e-4
 lr_dino_mult: 0.1
 optimizer: adamw
 clipping: False
@@ -37,9 +36,10 @@ mha_num_attention_heads: 4
 mha_num_attention_layers: 4
 mha_ff_dim_factor: 4
 positional_encoding_type: "rope"
+output_layers: [256, 512]
 
 # normalization for the action space
-normalize: True
+normalize: False
 
 # context
 context_type: temporal
@@ -121,3 +121,6 @@ pairwise_test_freq: 0 # in epochs
 eval_fraction: 0.25
 wandb_log_freq: 10 # in iterations
 eval_freq: 1 # in epochs
+log_high_loss_samples: True
+high_loss_threshold: 2.0
+max_high_loss_samples: 10
