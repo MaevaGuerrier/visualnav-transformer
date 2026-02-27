@@ -46,6 +46,8 @@ class ViNT_Dataset(Dataset):
         flip_aug: bool = False,
         image_aug: bool = False,
         image_aug_params: Dict[str, Any] = {},
+        learn_metric_distance: bool = False,
+        metric_distance_for_negatives: bool = False,
     ):
         """
         Main ViNT dataset class
@@ -66,6 +68,10 @@ class ViNT_Dataset(Dataset):
             goals_per_obs (int): Number of goals to sample per observation
             normalize (bool): Whether to normalize the distances or actions
             goal_type (str): What data type to use for the goal. The only one supported is "image" for now.
+            learn_metric_distance (bool): Whether to learn the metric distance (in meters) between observation 
+                                          and goal positions instead of temporal distance (in timesteps)
+            metric_distance_for_negatives (bool): If True and learn_metric_distance=True, compute actual metric
+                                                  distance for negative goals. If False, use max_dist_cat for negatives.
         """
         self.data_folder = data_folder
         self.data_split_folder = data_split_folder
@@ -122,6 +128,8 @@ class ViNT_Dataset(Dataset):
         self.normalize = normalize
         self.obs_type = obs_type
         self.goal_type = goal_type
+        self.learn_metric_distance = learn_metric_distance
+        self.metric_distance_for_negatives = metric_distance_for_negatives
 
         # load data/data_config.yaml
         with open(
@@ -136,6 +144,8 @@ class ViNT_Dataset(Dataset):
         # use this index to retrieve the dataset name from the data_config.yaml
         self.dataset_index = dataset_names.index(self.dataset_name)
         self.data_config = all_data_config[self.dataset_name]
+        # Get metric waypoint spacing for this dataset (used for loss scaling)
+        self.metric_waypoint_spacing = self.data_config.get("metric_waypoint_spacing", 0.1)
         self.trajectory_cache = {}
         self._load_index()
         self._build_caches()
@@ -400,7 +410,13 @@ class ViNT_Dataset(Dataset):
         #self._save_images(obs_image, goal_image, i)
         
         # Compute distances
-        if goal_is_negative:
+        if self.learn_metric_distance and (self.metric_distance_for_negatives or not goal_is_negative):
+            # Calculate Euclidean distance between observation and goal positions (in meters)
+            # For negatives: only compute metric distance if metric_distance_for_negatives=True
+            curr_pos = curr_traj_data["position"][curr_time]
+            goal_pos_metric = goal_traj_data["position"][min(goal_time, len(goal_traj_data["position"]) - 1)]
+            distance = np.linalg.norm(curr_pos - goal_pos_metric)
+        elif goal_is_negative:
             distance = self.max_dist_cat
         else:
             distance = (goal_time - curr_time) // self.waypoint_spacing
@@ -416,14 +432,18 @@ class ViNT_Dataset(Dataset):
             (not goal_is_negative)
         )
 
+        # Use float32 for metric distance, int64 for temporal distance
+        distance_dtype = torch.float32 if self.learn_metric_distance else torch.int64
+        
         return (
             torch.as_tensor(obs_image, dtype=torch.float32),
             torch.as_tensor(goal_image, dtype=torch.float32),
             actions_torch,
-            torch.as_tensor(distance, dtype=torch.int64),
+            torch.as_tensor(distance, dtype=distance_dtype),
             torch.as_tensor(goal_pos, dtype=torch.float32),
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
+            torch.as_tensor(self.metric_waypoint_spacing, dtype=torch.float32),
         )
 
     def _save_images(self, obs_image: torch.Tensor, goal_image: torch.Tensor, index: int) -> None:

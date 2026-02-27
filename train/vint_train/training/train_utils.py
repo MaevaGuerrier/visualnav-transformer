@@ -42,14 +42,20 @@ def _compute_losses(
     action_pred: torch.Tensor,
     alpha: float,
     learn_angle: bool,
-    action_mask: torch.Tensor = None,
+    action_mask: Optional[torch.Tensor] = None,
     return_per_sample: bool = False,
+    distance_loss_coeff: float = 0.01,
+    action_loss_type: str = "mse",
+    metric_waypoint_spacing: Optional[torch.Tensor] = None,
 ):
     """
     Compute losses for distance and action prediction.
 
     Args:
         return_per_sample: if True, also return per-sample total losses
+        distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
+        action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        metric_waypoint_spacing: per-sample metric waypoint spacing, required for "waypoint_spacing_scaled_mse"
     """
     dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
 
@@ -69,7 +75,27 @@ def _compute_losses(
 
     # Mask out invalid inputs (for negatives, or when the distance between obs and goal is large)
     assert action_pred.shape == action_label.shape, f"{action_pred.shape} != {action_label.shape}"
-    action_loss = action_reduce(F.mse_loss(action_pred, action_label, reduction="none"))
+    if action_loss_type == "mse":
+        unreduced_loss = F.mse_loss(action_pred, action_label, reduction="none")
+    elif action_loss_type == "mape":
+        unreduced_loss = F.l1_loss(action_pred, action_label, reduction="none") / (torch.abs(action_label) + 1e-2)
+    elif action_loss_type == "waypoint_spacing_scaled_mse":
+        # Scale residuals by metric waypoint spacing to equally penalize errors across datasets
+        # with different waypoint spacings. Divide residual by spacing so that denser datasets
+        # (smaller spacing) get scaled up and sparser datasets get scaled down.
+        assert metric_waypoint_spacing is not None, "metric_waypoint_spacing is required for waypoint_spacing_scaled_mse"
+        # Reshape spacings for broadcasting: [B] -> [B, 1, 1]
+        spacings = metric_waypoint_spacing.view(-1, 1, 1)
+        # Scale the action residuals (for x, y dimensions; angle is left as-is)
+        scaled_action_label = action_label.clone()
+        scaled_action_pred = action_pred.clone()
+        # Only scale the x, y coordinates (first 2 dimensions), not the angle
+        scaled_action_label[:, :, :2] = scaled_action_label[:, :, :2] / spacings
+        scaled_action_pred[:, :, :2] = scaled_action_pred[:, :, :2] / spacings
+        unreduced_loss = F.mse_loss(scaled_action_pred, scaled_action_label, reduction="none")
+    else:
+        raise ValueError(f"Unsupported action_loss_type: {action_loss_type}")
+    action_loss = action_reduce(unreduced_loss)
 
     action_waypts_cos_similairity = action_reduce(F.cosine_similarity(
         action_pred[:, :, :2], action_label[:, :, :2], dim=-1
@@ -100,14 +126,14 @@ def _compute_losses(
         results["action_orien_cos_sim"] = action_orien_cos_sim
         results["multi_action_orien_cos_sim"] = multi_action_orien_cos_sim
 
-    total_loss = alpha * 1e-2 * dist_loss + (1 - alpha) * action_loss
+    total_loss = alpha * distance_loss_coeff * dist_loss + (1 - alpha) * action_loss
     results["total_loss"] = total_loss
 
     if return_per_sample:
         # Compute per-sample losses for high-loss detection
         dist_loss_per_sample = F.mse_loss(dist_pred.squeeze(-1), dist_label.float(), reduction='none')
         action_loss_per_sample = action_reduce_per_sample(F.mse_loss(action_pred, action_label, reduction="none"))
-        total_loss_per_sample = alpha * 1e-2 * dist_loss_per_sample + (1 - alpha) * action_loss_per_sample
+        total_loss_per_sample = alpha * distance_loss_coeff * dist_loss_per_sample + (1 - alpha) * action_loss_per_sample
         results["total_loss_per_sample"] = total_loss_per_sample
 
     return results
@@ -289,6 +315,8 @@ def train(
     log_high_loss_samples: bool = False,
     high_loss_threshold: float = 10.0,
     max_high_loss_samples: int = 10,
+    distance_loss_coeff: float = 0.01,
+    action_loss_type: str = "mse",
 ):
     """
     Train the model for one epoch.
@@ -311,6 +339,8 @@ def train(
         log_high_loss_samples: whether to log samples with high loss
         high_loss_threshold: threshold for considering a loss as high
         max_high_loss_samples: maximum number of high loss samples to log
+        distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
+        action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
     """
     model.train()
     dist_loss_logger = Logger("dist_loss", "train", window_size=print_log_freq)
@@ -356,6 +386,7 @@ def train(
             goal_pos,
             dataset_index,
             action_mask,
+            metric_waypoint_spacing,
         ) = data
 
         obs_images = torch.split(obs_image, 3, dim=1)
@@ -371,6 +402,7 @@ def train(
         dist_label = dist_label.to(device)
         action_label = action_label.to(device)
         action_mask = action_mask.to(device)
+        metric_waypoint_spacing = metric_waypoint_spacing.to(device)
 
         optimizer.zero_grad()
       
@@ -385,6 +417,9 @@ def train(
             learn_angle=learn_angle,
             action_mask=action_mask,
             return_per_sample=log_high_loss_samples,
+            distance_loss_coeff=distance_loss_coeff,
+            action_loss_type=action_loss_type,
+            metric_waypoint_spacing=metric_waypoint_spacing,
         )
 
         # Log high-loss samples if enabled
@@ -464,6 +499,8 @@ def evaluate(
     use_wandb: bool = True,
     eval_fraction: float = 1.0,
     use_tqdm: bool = True,
+    distance_loss_coeff: float = 0.01,
+    action_loss_type: str = "mse",
 ):
     """
     Evaluate the model on the given evaluation dataset.
@@ -482,6 +519,8 @@ def evaluate(
         use_wandb (bool): whether to use wandb for logging
         eval_fraction (float): fraction of data to use for evaluation
         use_tqdm (bool): whether to use tqdm for logging
+        distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
+        action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
     """
     model.eval()
     dist_loss_logger = Logger("dist_loss", eval_type)
@@ -524,6 +563,7 @@ def evaluate(
                 goal_pos,
                 dataset_index,
                 action_mask,
+                metric_waypoint_spacing,
             ) = data
 
             obs_images = torch.split(obs_image, 3, dim=1)
@@ -539,6 +579,7 @@ def evaluate(
             dist_label = dist_label.to(device)
             action_label = action_label.to(device)
             action_mask = action_mask.to(device)
+            metric_waypoint_spacing = metric_waypoint_spacing.to(device)
 
             dist_pred, action_pred = model_outputs
 
@@ -550,6 +591,9 @@ def evaluate(
                 alpha=alpha,
                 learn_angle=learn_angle,
                 action_mask=action_mask,
+                distance_loss_coeff=distance_loss_coeff,
+                action_loss_type=action_loss_type,
+                metric_waypoint_spacing=metric_waypoint_spacing,
             )
 
             for key, value in losses.items():

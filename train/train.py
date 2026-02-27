@@ -109,6 +109,10 @@ def main(config):
             data_config["end_slack"] = 0
         if "waypoint_spacing" not in data_config:
             data_config["waypoint_spacing"] = 1
+        if "learn_metric_distance" not in config:
+            config["learn_metric_distance"] = False
+        if "metric_distance_for_negatives" not in config:
+            config["metric_distance_for_negatives"] = False
 
         for data_split_type in ["train", "test"]:
             if data_split_type in data_config:
@@ -134,6 +138,8 @@ def main(config):
                         flip_aug=config["flip_aug"] if "flip_aug" in config and data_split_type=="train" else False,
                         image_aug=config["image_aug"] if "image_aug" in config and data_split_type=="train" else False,
                         image_aug_params=config["image_aug_params"] if "image_aug_params" in config and data_split_type=="train" else {},
+                        learn_metric_distance=config["learn_metric_distance"],
+                        metric_distance_for_negatives=config["metric_distance_for_negatives"],
                     )
                     if data_split_type == "train":
                         train_dataset.append(dataset)
@@ -398,6 +404,14 @@ def main(config):
         if scheduler is not None and "scheduler" in latest_checkpoint:
             scheduler.load_state_dict(latest_checkpoint["scheduler"].state_dict())
 
+    # Set default distance loss coefficient if not specified
+    if "distance_loss_coeff" not in config:
+        config["distance_loss_coeff"] = 0.01
+    
+    # Set default action loss type if not specified
+    if "action_loss_type" not in config:
+        config["action_loss_type"] = "mse"
+
     if config["model_type"] in ["gnm", "vint", "vint_dino"]:
         train_eval_loop(
             train_model=config["train"],
@@ -424,6 +438,8 @@ def main(config):
             ignore_high_loss_epochs=config.get("ignore_high_loss_epochs", 0),
             high_loss_threshold=config.get("high_loss_threshold", 10.0),
             max_high_loss_samples=config.get("max_high_loss_samples", 10),
+            distance_loss_coeff=config["distance_loss_coeff"],
+            action_loss_type=config["action_loss_type"],
         )
     elif config["model_type"] == "nomad":
         train_eval_loop_nomad(
