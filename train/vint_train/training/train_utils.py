@@ -463,7 +463,7 @@ def evaluate(
     num_images_log: int = 8,
     use_wandb: bool = True,
     eval_fraction: float = 1.0,
-
+    use_tqdm: bool = True,
 ):
     """
     Evaluate the model on the given evaluation dataset.

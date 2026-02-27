@@ -113,10 +113,10 @@ class ViNTWithDINOTokens(BaseModel):
             apply_positional_encoding=positional_encoding_type == "sinusoidal",
         )
         self.dist_predictor = nn.Sequential(
-            nn.Linear(32, 1),
+            nn.Linear(output_layers[-1], 1),
         )
         self.action_predictor = nn.Sequential(
-            nn.Linear(32, self.len_trajectory_pred * self.num_action_params),
+            nn.Linear(output_layers[-1], self.len_trajectory_pred * self.num_action_params),
         )
 
     def forward(
