@@ -69,3 +69,11 @@ door_loop:
   ang_offset: 0.0
   img_process_func: "process_sacson_img"
   odom_process_func: "nav_to_xy_yaw"
+
+out_snow:
+  odomtopics: "/lvi_sam/lidar/mapping/odometry"
+  imtopics: "/usb_cam/image_raw/compressed"
+  ang_offset: 0.0
+  img_process_func: "process_sacson_img"
+  odom_process_func: "nav_to_xy_yaw"
+

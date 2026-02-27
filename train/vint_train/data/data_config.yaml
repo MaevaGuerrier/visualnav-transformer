@@ -69,4 +69,7 @@ carla:
 sacson:
   metric_waypoint_spacing: 0.255
 
+out_snow:
+  metric_waypoint_spacing: 0.06
+
 # add your own dataset params here:
