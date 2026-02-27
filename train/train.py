@@ -211,6 +211,7 @@ def main(config):
             mha_num_attention_layers=config["mha_num_attention_layers"],
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
             output_layers=config["output_layers"],
+            separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
         )
     elif config["model_type"] == "nomad":
         if config["vision_encoder"] == "nomad_vint":

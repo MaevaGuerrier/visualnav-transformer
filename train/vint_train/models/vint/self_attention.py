@@ -157,54 +157,17 @@ class TransformerDecoderLayer(nn.Module):
         return tgt
 
 
-class MultiLayerDecoder(nn.Module):
-    def __init__(self, embed_dim=512, seq_len=6, output_layers=[256, 128, 64], nhead=8, num_layers=8, ff_dim_factor=4):
-        super(MultiLayerDecoder, self).__init__()
-        self.positional_encoding = PositionalEncoding(embed_dim, max_seq_len=seq_len)
-        
-        # Create independent encoder layers instead of using TransformerEncoder
-        # This allows each layer to have its own initialized weights
-        dim_feedforward = ff_dim_factor * embed_dim
-        self.layers = nn.ModuleList([
-            TransformerEncoderLayer(
-                d_model=embed_dim,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                activation="gelu",
-                norm_first=True
-            ) for _ in range(num_layers)
-        ])
-        
-        self.num_layers = num_layers
-        
-        self.output_layers = nn.ModuleList([nn.Linear(seq_len*embed_dim, embed_dim)])
-        self.output_layers.append(nn.Linear(embed_dim, output_layers[0]))
-        for i in range(len(output_layers)-1):
-            self.output_layers.append(nn.Linear(output_layers[i], output_layers[i+1]))
-
-    def forward(self, x):
-        if self.positional_encoding: 
-            x = self.positional_encoding(x)
-        
-        # Apply each layer independently
-        for layer in self.layers:
-            x = layer(x)
-        
-        # currently, x is [batch_size, seq_len, embed_dim]
-        x = x.reshape(x.shape[0], -1)
-        for i in range(len(self.output_layers)):
-            x = self.output_layers[i](x)
-            x = F.relu(x)
-        return x
-
-
-class LastTokenMultiLayerDecoder(nn.Module):
-    def __init__(self, embed_dim=512, seq_len=6, output_layers=[256, 128, 64], nhead=8, num_layers=8, ff_dim_factor=4, apply_positional_encoding=True):
-        super(LastTokenMultiLayerDecoder, self).__init__()
+class TransformerEncoder(nn.Module):
+    """
+    Transformer Encoder that applies positional encoding and transformer layers.
+    Returns the full sequence of token representations.
+    The caller is responsible for extracting what they need (last token, flatten all, etc.)
+    """
+    def __init__(self, embed_dim=512, seq_len=6, nhead=8, num_layers=8, ff_dim_factor=4, apply_positional_encoding=True):
+        super(TransformerEncoder, self).__init__()
         self.positional_encoding = PositionalEncoding(embed_dim, max_seq_len=seq_len) if apply_positional_encoding else None
         
-        # Create independent encoder layers instead of using TransformerEncoder
-        # This allows each layer to have its own initialized weights
+        # Create independent encoder layers
         dim_feedforward = ff_dim_factor * embed_dim
         self.layers = nn.ModuleList([
             TransformerEncoderLayer(
@@ -217,13 +180,14 @@ class LastTokenMultiLayerDecoder(nn.Module):
         ])
         
         self.num_layers = num_layers
-        
-        self.output_layers = nn.ModuleList([nn.Linear(embed_dim, embed_dim)])
-        self.output_layers.append(nn.Linear(embed_dim, output_layers[0]))
-        for i in range(len(output_layers)-1):
-            self.output_layers.append(nn.Linear(output_layers[i], output_layers[i+1]))
-
+    
     def forward(self, x):
+        """
+        Args:
+            x: [batch_size, seq_len, embed_dim]
+        Returns:
+            x: [batch_size, seq_len, embed_dim] - full sequence of token representations
+        """
         if self.positional_encoding:
             x = self.positional_encoding(x)
         
@@ -231,13 +195,7 @@ class LastTokenMultiLayerDecoder(nn.Module):
         for layer in self.layers:
             x = layer(x)
         
-        # currently, x is [batch_size, seq_len, embed_dim]
-        x = x[:, -1, :]  # take only the last token
-        for i in range(len(self.output_layers)):
-            x = self.output_layers[i](x)
-            x = F.relu(x)
         return x
-
 
 class TransformerEncoderDecoder(nn.Module):
     def __init__(self, embed_dim=512, seq_len=6, output_layers=[256, 128, 64], nhead=8, num_layers=8, ff_dim_factor=4):

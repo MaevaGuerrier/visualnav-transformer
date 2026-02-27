@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import List, Dict, Optional, Tuple
 from efficientnet_pytorch import EfficientNet
 from vint_train.models.base_model import BaseModel
-from vint_train.models.vint.self_attention import LastTokenMultiLayerDecoder
+from vint_train.models.vint.self_attention import TransformerEncoder
 
 from transformers import AutoModel
 
@@ -58,11 +58,13 @@ class ViNTWithDINOTokens(BaseModel):
         mha_ff_dim_factor: int = 4,
         output_layers: List[int] = [256, 128, 64, 32],
         positional_encoding_type: str = "peg",
+        separate_tokens_and_heads: bool = False,
     ) -> None:
         super(ViNTWithDINOTokens, self).__init__(context_size, len_traj_pred, learn_angle)
         self.encoding_size = encoding_size
         self.image_size = image_size
         self.context_size = context_size
+        self.separate_tokens_and_heads = separate_tokens_and_heads
 
         if "dino" in obs_encoder:
             self.vision_encoder = AutoModel.from_pretrained(obs_encoder)
@@ -78,11 +80,25 @@ class ViNTWithDINOTokens(BaseModel):
             disable_peg = (positional_encoding_type != "peg"),
         )
 
-        self.token_embedding = nn.Embedding(
-            num_embeddings=1,
-            embedding_dim=self.encoding_size,
-        )
         self.positional_encoding_type = positional_encoding_type
+        
+        # Token(s) for readout from the decoder
+        if self.separate_tokens_and_heads:
+            # Separate tokens for distance and action prediction
+            self.dist_token_embedding = nn.Embedding(
+                num_embeddings=1,
+                embedding_dim=self.encoding_size,
+            )
+            self.action_token_embedding = nn.Embedding(
+                num_embeddings=1,
+                embedding_dim=self.encoding_size,
+            )
+        else:
+            # Shared token for both predictions
+            self.token_embedding = nn.Embedding(
+                num_embeddings=1,
+                embedding_dim=self.encoding_size,
+            )
         self.temporal_embedding = nn.Parameter(torch.zeros((1, self.context_size+1, self.encoding_size, 1)))
 
         if positional_encoding_type == "rope":
@@ -103,15 +119,26 @@ class ViNTWithDINOTokens(BaseModel):
             self.register_buffer("cos_w", torch.cat((freqs_w, freqs_w), dim=-1).cos())
             self.register_buffer("sin_w", torch.cat((freqs_w, freqs_w), dim=-1).sin())
 
-        self.decoder = LastTokenMultiLayerDecoder(
+        # Adjust seq_len based on number of readout tokens
+        num_readout_tokens = 2 if self.separate_tokens_and_heads else 1
+        image_tokens_len = (self.context_size+1)*(self.image_size[0]//self.patch_size//2)*(self.image_size[1]//self.patch_size//2)
+        self.decoder = TransformerEncoder(
             embed_dim=self.encoding_size,
-            seq_len=(self.context_size+1)*(self.image_size[0]//self.patch_size//2)*(self.image_size[1]//self.patch_size//2)+1,
-            output_layers=output_layers,
+            seq_len=image_tokens_len + num_readout_tokens,
             nhead=mha_num_attention_heads,
             num_layers=mha_num_attention_layers,
             ff_dim_factor=mha_ff_dim_factor,
             apply_positional_encoding=positional_encoding_type == "sinusoidal",
         )
+        # Output layers for processing extracted tokens
+        self.output_layers = nn.Sequential(
+            nn.Linear(self.encoding_size, output_layers[0]),
+            nn.ReLU(),
+        )
+        for i in range(len(output_layers)-1):
+            self.output_layers.append(nn.Linear(output_layers[i], output_layers[i+1]))
+            self.output_layers.append(nn.ReLU())
+        
         self.dist_predictor = nn.Sequential(
             nn.Linear(output_layers[-1], 1),
         )
@@ -172,21 +199,44 @@ class ViNTWithDINOTokens(BaseModel):
             image_tokens = torch.cat([img_h, img_w], dim=2)
             image_tokens = image_tokens.reshape(batch_size, self.context_size + 1, self.encoding_size, -1)
 
-        pred_token_emb = self.token_embedding(torch.tensor([0]*batch_size).to(obs_img.device))[:,None, :]
         image_tokens = image_tokens.permute((0, 3, 1, 2)) 
-        tokens = torch.cat([
-            image_tokens.reshape(
-                batch_size,
-                -1,
-                self.encoding_size
-            ),  
-            pred_token_emb
-        ], dim=1)
+        image_tokens_flat = image_tokens.reshape(
+            batch_size,
+            -1,
+            self.encoding_size
+        )
         
-        final_repr = self.decoder(tokens)
-
-        dist_pred = self.dist_predictor(final_repr)
-        action_pred = self.action_predictor(final_repr)
+        if self.separate_tokens_and_heads:
+            # Use separate tokens for distance and action prediction
+            device = obs_img.device
+            
+            # Get both readout tokens
+            dist_token_emb = self.dist_token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]
+            action_token_emb = self.action_token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]
+            
+            # Concat: image tokens + dist token + action token
+            tokens = torch.cat([image_tokens_flat, dist_token_emb, action_token_emb], dim=1)
+            
+            # Run encoder
+            encoded_tokens = self.decoder(tokens)
+            
+            # Extract last two tokens and apply output layers
+            dist_repr = self.output_layers(encoded_tokens[:, -2, :])  # Second to last token
+            action_repr = self.output_layers(encoded_tokens[:, -1, :])  # Last token
+            
+            dist_pred = self.dist_predictor(dist_repr)
+            action_pred = self.action_predictor(action_repr)
+        else:
+            # Shared token with separate heads (original behavior)
+            pred_token_emb = self.token_embedding(torch.zeros(batch_size, dtype=torch.long, device=obs_img.device))[:, None, :]
+            tokens = torch.cat([image_tokens_flat, pred_token_emb], dim=1)
+            
+            # Run encoder and extract last token
+            encoded_tokens = self.decoder(tokens)
+            final_repr = self.output_layers(encoded_tokens[:, -1, :])
+            
+            dist_pred = self.dist_predictor(final_repr)
+            action_pred = self.action_predictor(final_repr)
 
         action_pred = action_pred.reshape(
             (action_pred.shape[0], self.len_trajectory_pred, self.num_action_params)

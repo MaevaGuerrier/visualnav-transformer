@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import List, Dict, Optional, Tuple
 from efficientnet_pytorch import EfficientNet
 from vint_train.models.base_model import BaseModel
-from vint_train.models.vint.self_attention import MultiLayerDecoder
+from vint_train.models.vint.self_attention import TransformerEncoder
 
 class ViNT(BaseModel):
     def __init__(
@@ -57,13 +57,26 @@ class ViNT(BaseModel):
         else:
             self.compress_goal_enc = nn.Identity()
 
-        self.decoder = MultiLayerDecoder(
+        self.decoder = TransformerEncoder(
             embed_dim=self.obs_encoding_size,
             seq_len=self.context_size+2,
-            output_layers=[256, 128, 64, 32],
             nhead=mha_num_attention_heads,
             num_layers=mha_num_attention_layers,
             ff_dim_factor=mha_ff_dim_factor,
+        )
+        # Output layers: flatten all tokens, then project to final output
+        output_dim = (self.context_size + 2) * self.obs_encoding_size
+        self.output_layers = nn.Sequential(
+            nn.Linear(output_dim, self.obs_encoding_size),
+            nn.ReLU(),
+            nn.Linear(self.obs_encoding_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
         )
         self.dist_predictor = nn.Sequential(
             nn.Linear(32, 1),
@@ -120,7 +133,12 @@ class ViNT(BaseModel):
 
         # concatenate the goal encoding to the observation encoding
         tokens = torch.cat((obs_encoding, goal_encoding), dim=1)
-        final_repr = self.decoder(tokens)
+        encoded_tokens = self.decoder(tokens)
+        # currently, the size is [batch_size, seq_len, embed_dim]
+        
+        # Flatten all tokens and apply output layers
+        flattened = encoded_tokens.reshape(encoded_tokens.shape[0], -1)
+        final_repr = self.output_layers(flattened)
         # currently, the size is [batch_size, 32]
 
         dist_pred = self.dist_predictor(final_repr)
