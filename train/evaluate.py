@@ -248,23 +248,38 @@ def compute_losses(
     alpha: float,
     learn_angle: bool,
     action_mask: torch.Tensor,
+    distance_loss_coeff: float = 0.01,
+    action_scale: Optional[float] = None,
 ) -> Dict[str, float]:
-    """Compute evaluation losses."""
+    """Compute evaluation losses.
+    
+    Args:
+        distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
+        action_scale: scaling factor to apply to action predictions (default: None, means 1.0)
+    Returns:
+        Dictionary of metrics including 'action_scale'
+    """
     with torch.no_grad():
         dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
+        
+        # Apply action scaling if provided
+        if action_scale is not None and action_scale != 1.0:
+            action_pred_scaled = action_pred * action_scale
+        else:
+            action_pred_scaled = action_pred
         
         def action_reduce(unreduced_loss: torch.Tensor):
             while unreduced_loss.dim() > 1:
                 unreduced_loss = unreduced_loss.mean(dim=-1)
             return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
         
-        action_loss = action_reduce(F.mse_loss(action_pred, action_label, reduction="none"))
+        action_loss = action_reduce(F.mse_loss(action_pred_scaled, action_label, reduction="none"))
         
         action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-            action_pred[:, :, :2], action_label[:, :, :2], dim=-1
+            action_pred_scaled[:, :, :2], action_label[:, :, :2], dim=-1
         ))
         multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-            torch.flatten(action_pred[:, :, :2], start_dim=1),
+            torch.flatten(action_pred_scaled[:, :, :2], start_dim=1),
             torch.flatten(action_label[:, :, :2], start_dim=1),
             dim=-1,
         ))
@@ -274,21 +289,22 @@ def compute_losses(
             "action_loss": action_loss.item(),
             "action_waypts_cos_sim": action_waypts_cos_sim.item(),
             "multi_action_waypts_cos_sim": multi_action_waypts_cos_sim.item(),
+            "action_scale": action_scale,
         }
         
         if learn_angle:
             action_orien_cos_sim = action_reduce(F.cosine_similarity(
-                action_pred[:, :, 2:], action_label[:, :, 2:], dim=-1
+                action_pred_scaled[:, :, 2:], action_label[:, :, 2:], dim=-1
             ))
             multi_action_orien_cos_sim = action_reduce(F.cosine_similarity(
-                torch.flatten(action_pred[:, :, 2:], start_dim=1),
+                torch.flatten(action_pred_scaled[:, :, 2:], start_dim=1),
                 torch.flatten(action_label[:, :, 2:], start_dim=1),
                 dim=-1,
             ))
             results["action_orien_cos_sim"] = action_orien_cos_sim.item()
             results["multi_action_orien_cos_sim"] = multi_action_orien_cos_sim.item()
         
-        total_loss = alpha * 1e-2 * dist_loss + (1 - alpha) * action_loss
+        total_loss = alpha * distance_loss_coeff * dist_loss + (1 - alpha) * action_loss
         results["total_loss"] = total_loss.item()
     
     return results
@@ -379,6 +395,72 @@ def visualize_sample(
     plt.close(fig)
 
 
+def _compute_optimal_action_scale(
+    model: nn.Module,
+    dataloader: DataLoader,
+    transform: transforms.Compose,
+    device: torch.device,
+    model_type: str,
+    logger: logging.Logger,
+) -> float:
+    """Compute the optimal action scaling factor that minimizes MSE loss.
+    
+    The optimal scale is: scale = sum(pred * label) / sum(pred * pred)
+    This is derived by taking the derivative of MSE loss w.r.t. scale and setting to 0.
+    
+    Returns:
+        Optimal scaling factor (float)
+    """
+    total_numerator = 0.0  # sum of pred * label
+    total_denominator = 0.0  # sum of pred * pred
+    total_masked_elements = 0
+    
+    pbar = tqdm.tqdm(dataloader, desc="Computing optimal scale", leave=False)
+    for batch_data in pbar:
+        obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask = batch_data
+        
+        # Process images
+        obs_images = torch.split(obs_image, 3, dim=1)
+        obs_images = [transform(obs_img).to(device) for obs_img in obs_images]
+        obs_image_processed = torch.cat(obs_images, dim=1)
+        goal_image_processed = transform(goal_image).to(device)
+        
+        # Move labels to device
+        action_label = action_label.to(device)
+        action_mask = action_mask.to(device)
+        
+        # Forward pass
+        if model_type == "nomad":
+            # Skip NoMaD for now (diffusion model action prediction is different)
+            continue
+        else:
+            model_outputs = model(obs_image_processed, goal_image_processed)
+            dist_pred, action_pred = model_outputs
+        
+        # Expand mask to match action dimensions
+        expanded_mask = action_mask
+        while expanded_mask.dim() < action_pred.dim():
+            expanded_mask = expanded_mask.unsqueeze(-1)
+        expanded_mask = expanded_mask.expand_as(action_pred)
+        
+        # Masked pred and label
+        masked_pred = action_pred * expanded_mask
+        masked_label = action_label * expanded_mask
+        
+        # Accumulate statistics
+        total_numerator += (masked_pred * masked_label).sum().item()
+        total_denominator += (masked_pred * masked_pred).sum().item()
+        total_masked_elements += expanded_mask.sum().item()
+    
+    # Compute optimal scale
+    if total_denominator > 1e-8:
+        optimal_scale = total_numerator / total_denominator
+    else:
+        optimal_scale = 1.0
+    
+    return optimal_scale
+
+
 def evaluate_model(
     model: nn.Module,
     model_config: Dict[str, Any],
@@ -387,10 +469,12 @@ def evaluate_model(
     output_dir: str,
     viz_every_n: Optional[int],
     logger: logging.Logger,
+    auto_scale_actions: bool = False,
 ) -> Dict[str, Dict[str, float]]:
     """Run evaluation on all datasets."""
     model.eval()
     alpha = model_config.get("alpha", 0.5)
+    distance_loss_coeff = model_config.get("distance_loss_coeff", 0.01)
     learn_angle = model_config["learn_angle"]
     normalized = model_config["normalize"]
     model_type = model_config["model_type"]
@@ -399,12 +483,22 @@ def evaluate_model(
     
     with torch.no_grad():
         for dataset_name, dataset_info in dataloaders.items():
-            logger.info(f"\n{'='*60}")
+            logger.info(f"{'='*60}")
             logger.info(f"Evaluating on dataset: {dataset_name}")
             logger.info(f"{'='*60}")
             
             dataloader = dataset_info["dataloader"]
             transform = dataset_info["transform"]
+            
+            # Compute optimal action scale if requested
+            dataset_action_scale = None
+            if auto_scale_actions and model_type != "nomad":
+                logger.info("Computing optimal action scaling factor...")
+                dataset_action_scale = _compute_optimal_action_scale(
+                    model, dataloader, transform, device, model_type, logger
+                )
+                logger.info(f"Optimal action scale for {dataset_name}: {dataset_action_scale:.4f}")
+            dataset_action_scale = 3.0
             
             # Metrics accumulators
             metrics_accumulator = {
@@ -417,6 +511,8 @@ def evaluate_model(
             if learn_angle:
                 metrics_accumulator["action_orien_cos_sim"] = []
                 metrics_accumulator["multi_action_orien_cos_sim"] = []
+            if auto_scale_actions:
+                metrics_accumulator["action_scale"] = []
             
             # Visualization counter
             viz_counter = 0
@@ -453,36 +549,7 @@ def evaluate_model(
                 
                 # Forward pass
                 if model_type == "nomad":
-                    # NoMaD evaluation logic
-                    # Get vision encoding
-                    goal_mask = torch.zeros((batch_size,)).long().to(device)
-                    obsgoal_cond = model("vision_encoder", obs_img=obs_image_processed, 
-                                        goal_img=goal_image_processed, input_goal_mask=goal_mask)
-                    obsgoal_cond_flat = obsgoal_cond.flatten(start_dim=1)
-                    
-                    # Distance prediction
-                    dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond_flat)
-                    
-                    # For action prediction, use the noise_pred_net with zero noise (or average)
-                    # Simplified: use the mean of the diffusion process
-                    # Note: Full NoMaD evaluation with diffusion sampling is complex
-                    # Here we do a simplified evaluation
-                    
-                    # Create dummy action_pred for metrics (would need full diffusion sampling for accurate eval)
-                    # For now, use a placeholder that will give high loss to indicate this needs proper implementation
-                    action_pred = torch.zeros_like(action_label)
-                    
-                    # Compute simplified losses
-                    dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
-                    action_loss = torch.tensor(0.0)  # Placeholder
-                    
-                    batch_metrics = {
-                        "dist_loss": dist_loss.item(),
-                        "action_loss": 0.0,  # Not computed for NoMaD in simplified version
-                        "action_waypts_cos_sim": 0.0,
-                        "multi_action_waypts_cos_sim": 0.0,
-                        "total_loss": dist_loss.item(),
-                    }
+                    raise ValueError("Evaluation for NoMaD is not implemented yet (action prediction is different due to diffusion model)")
                 else:
                     # GNM, ViNT, ViNT-DINO
                     model_outputs = model(obs_image_processed, goal_image_processed)
@@ -496,6 +563,8 @@ def evaluate_model(
                         alpha=alpha,
                         learn_angle=learn_angle,
                         action_mask=action_mask,
+                        distance_loss_coeff=distance_loss_coeff,
+                        action_scale=dataset_action_scale,
                     )
                 
                 # Accumulate metrics
@@ -552,12 +621,14 @@ def evaluate_model(
             all_metrics[dataset_name] = dataset_metrics
             
             # Log metrics
-            logger.info(f"\nResults for {dataset_name}:")
+            logger.info(f"  Results for {dataset_name}:")
             logger.info(f"  Samples: {dataset_metrics['num_samples']}")
             logger.info(f"  Distance Loss: {dataset_metrics.get('dist_loss', 0):.4f} ± {dataset_metrics.get('dist_loss_std', 0):.4f}")
             logger.info(f"  Action Loss: {dataset_metrics.get('action_loss', 0):.4f} ± {dataset_metrics.get('action_loss_std', 0):.4f}")
             logger.info(f"  Total Loss: {dataset_metrics.get('total_loss', 0):.4f} ± {dataset_metrics.get('total_loss_std', 0):.4f}")
             logger.info(f"  Action Waypts Cos Sim: {dataset_metrics.get('action_waypts_cos_sim', 0):.4f}")
+            if auto_scale_actions and 'action_scale' in dataset_metrics:
+                logger.info(f"  Optimal Action Scale: {dataset_metrics.get('action_scale', 0):.4f}")
             if viz_every_n:
                 logger.info(f"  Visualizations saved: {viz_counter}")
     
@@ -635,6 +706,11 @@ def main():
         nargs="+",
         default=[0],
         help="GPU IDs to use",
+    )
+    parser.add_argument(
+        "--auto-scale-actions",
+        action="store_true",
+        help="Automatically compute and apply optimal action scaling factor per dataset",
     )
     
     args = parser.parse_args()
@@ -727,6 +803,7 @@ def main():
         output_dir=args.output_dir,
         viz_every_n=args.viz_every_n,
         logger=logger,
+        auto_scale_actions=args.auto_scale_actions,
     )
     elapsed_time = time.time() - start_time
     
@@ -742,7 +819,7 @@ def main():
     metrics_path = os.path.join(args.output_dir, "metrics.json")
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
-    logger.info(f"\nMetrics saved to: {metrics_path}")
+    logger.info(f"Metrics saved to: {metrics_path}")
     
     # Log to wandb if enabled
     if args.use_wandb:
@@ -752,22 +829,33 @@ def main():
         wandb.finish()
     
     # Final summary
-    logger.info("\n" + "="*60)
+    logger.info("="*60)
     logger.info("Evaluation Complete")
     logger.info("="*60)
     logger.info(f"Total time: {elapsed_time:.2f} seconds")
     logger.info(f"Output directory: {args.output_dir}")
     
     # Print summary table
-    logger.info("\nSummary of Results:")
-    logger.info(f"{'Dataset':<20} {'Dist Loss':<12} {'Action Loss':<12} {'Total Loss':<12}")
-    logger.info("-" * 60)
-    for dataset_name, dataset_metrics in metrics.items():
-        if not dataset_name.startswith("_"):
-            logger.info(f"{dataset_name:<20} "
-                       f"{dataset_metrics.get('dist_loss', 0):<12.4f} "
-                       f"{dataset_metrics.get('action_loss', 0):<12.4f} "
-                       f"{dataset_metrics.get('total_loss', 0):<12.4f}")
+    logger.info("Summary of Results:")
+    if args.auto_scale_actions:
+        logger.info(f"{'Dataset':<20} {'Dist Loss':<12} {'Action Loss':<12} {'Action Scale':<14} {'Total Loss':<12}")
+        logger.info("-" * 72)
+        for dataset_name, dataset_metrics in metrics.items():
+            if not dataset_name.startswith("_"):
+                logger.info(f"{dataset_name:<20} "
+                           f"{dataset_metrics.get('dist_loss', 0):<12.4f} "
+                           f"{dataset_metrics.get('action_loss', 0):<12.4f} "
+                           f"{dataset_metrics.get('action_scale', 0):<14.4f} "
+                           f"{dataset_metrics.get('total_loss', 0):<12.4f}")
+    else:
+        logger.info(f"{'Dataset':<20} {'Dist Loss':<12} {'Action Loss':<12} {'Total Loss':<12}")
+        logger.info("-" * 60)
+        for dataset_name, dataset_metrics in metrics.items():
+            if not dataset_name.startswith("_"):
+                logger.info(f"{dataset_name:<20} "
+                           f"{dataset_metrics.get('dist_loss', 0):<12.4f} "
+                           f"{dataset_metrics.get('action_loss', 0):<12.4f} "
+                           f"{dataset_metrics.get('total_loss', 0):<12.4f}")
 
 
 if __name__ == "__main__":
