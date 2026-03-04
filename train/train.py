@@ -22,6 +22,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from vint_train.models.gnm.gnm import GNM
 from vint_train.models.vint.vint import ViNT
 from vint_train.models.vint.vint_dino import ViNTWithDINOTokens
+from vint_train.models.vint.vint_da import ViNTWithDepthAnything
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
@@ -219,6 +220,22 @@ def main(config):
             output_layers=config["output_layers"],
             separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
         )
+    elif config["model_type"] == "vint_da":
+        model = ViNTWithDepthAnything(
+            image_size=config["image_size"],
+            context_size=config["context_size"],
+            len_traj_pred=config["len_traj_pred"],
+            learn_angle=config["learn_angle"],
+            obs_encoder=config["obs_encoder"],
+            encoding_size=config["obs_encoding_size"],
+            mha_num_attention_heads=config["mha_num_attention_heads"],
+            mha_num_attention_layers=config["mha_num_attention_layers"],
+            mha_ff_dim_factor=config["mha_ff_dim_factor"],
+            output_layers=config["output_layers"],
+            positional_encoding_type=config.get("positional_encoding_type", "peg"),
+            separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
+            add_temporal_pe=config.get("add_temporal_pe", False),
+        )
     elif config["model_type"] == "nomad":
         if config["vision_encoder"] == "nomad_vint":
             vision_encoder = NoMaD_ViNT(
@@ -284,7 +301,7 @@ def main(config):
     lr = float(config["lr"])
     config["optimizer"] = config["optimizer"].lower()
     params = model.parameters()
-    if config["model_type"] == "vint_dino" and "lr_dino_mult" in config:
+    if config["model_type"] in ["vint_dino", "vint_da"] and "lr_dino_mult" in config:
         print("Using different lr for dino encoder with multiplier", config["lr_dino_mult"])
 
         dino_params = list(model.vision_encoder.parameters())
@@ -395,6 +412,9 @@ def main(config):
         elif config["model_type"] == "vint_dino":
             for param in model_to_freeze.vision_encoder.parameters():
                 param.requires_grad = False
+        elif config["model_type"] == "vint_da":
+            for param in model_to_freeze.vision_encoder.parameters():
+                param.requires_grad = False
         else:
             raise ValueError(f"Model {config['model_type']} not supported for freezing encoders")
 
@@ -412,7 +432,7 @@ def main(config):
     if "action_loss_type" not in config:
         config["action_loss_type"] = "mse"
 
-    if config["model_type"] in ["gnm", "vint", "vint_dino"]:
+    if config["model_type"] in ["gnm", "vint", "vint_dino", "vint_da"]:
         train_eval_loop(
             train_model=config["train"],
             model=model,
