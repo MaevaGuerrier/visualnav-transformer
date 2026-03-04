@@ -227,11 +227,17 @@ class ViNT_Dataset(Dataset):
         Sample a goal from the future in the same trajectory.
         Returns: (trajectory_name, goal_time, goal_is_negative)
         """
-        goal_offset = np.random.randint(0, max_goal_dist + 1)
-        if goal_offset == 0:
-            trajectory_name, goal_time = self._sample_negative()
-            return trajectory_name, goal_time, True
+        if self.negative_mining:
+            goal_offset = np.random.randint(0, max_goal_dist + 1)
+            if goal_offset == 0:
+                trajectory_name, goal_time = self._sample_negative()
+                return trajectory_name, goal_time, True
+            else:
+                goal_time = curr_time + int(goal_offset * self.waypoint_spacing)
+                return trajectory_name, goal_time, False
         else:
+            # No negative mining - always sample from the same trajectory
+            goal_offset = np.random.randint(1, max_goal_dist + 1)
             goal_time = curr_time + int(goal_offset * self.waypoint_spacing)
             return trajectory_name, goal_time, False
 
