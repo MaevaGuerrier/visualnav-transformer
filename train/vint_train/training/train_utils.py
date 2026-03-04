@@ -46,6 +46,7 @@ def _compute_losses(
     return_per_sample: bool = False,
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
+    distance_loss_type: str = "mse",
     metric_waypoint_spacing: Optional[torch.Tensor] = None,
 ):
     """
@@ -55,9 +56,22 @@ def _compute_losses(
         return_per_sample: if True, also return per-sample total losses
         distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
         action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        distance_loss_type: type of distance loss to use ("mse", "waypoint_spacing_scaled_mse")
         metric_waypoint_spacing: per-sample metric waypoint spacing, required for "waypoint_spacing_scaled_mse"
     """
-    dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
+    # Compute distance loss based on distance_loss_type
+    if distance_loss_type == "mse":
+        dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
+    elif distance_loss_type == "waypoint_spacing_scaled_mse":
+        # Scale distance residuals by metric waypoint spacing to equally penalize errors
+        # across datasets with different waypoint spacings. Divide residual by spacing
+        # so that denser datasets (smaller spacing) get scaled up.
+        assert metric_waypoint_spacing is not None, "metric_waypoint_spacing is required for waypoint_spacing_scaled_mse"
+        scaled_dist_label = dist_label.float() / metric_waypoint_spacing
+        scaled_dist_pred = dist_pred.squeeze(-1) / metric_waypoint_spacing
+        dist_loss = F.mse_loss(scaled_dist_pred, scaled_dist_label)
+    else:
+        raise ValueError(f"Unsupported distance_loss_type: {distance_loss_type}")
 
     def action_reduce(unreduced_loss: torch.Tensor):
         # Reduce over non-batch dimensions to get loss per batch element
@@ -317,6 +331,7 @@ def train(
     max_high_loss_samples: int = 10,
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
+    distance_loss_type: str = "mse",
 ):
     """
     Train the model for one epoch.
@@ -341,6 +356,7 @@ def train(
         max_high_loss_samples: maximum number of high loss samples to log
         distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
         action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        distance_loss_type: type of distance loss to use ("mse", "waypoint_spacing_scaled_mse")
     """
     model.train()
     dist_loss_logger = Logger("dist_loss", "train", window_size=print_log_freq)
@@ -419,6 +435,7 @@ def train(
             return_per_sample=log_high_loss_samples,
             distance_loss_coeff=distance_loss_coeff,
             action_loss_type=action_loss_type,
+            distance_loss_type=distance_loss_type,
             metric_waypoint_spacing=metric_waypoint_spacing,
         )
 
@@ -501,6 +518,7 @@ def evaluate(
     use_tqdm: bool = True,
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
+    distance_loss_type: str = "mse",
 ):
     """
     Evaluate the model on the given evaluation dataset.
@@ -521,6 +539,7 @@ def evaluate(
         use_tqdm (bool): whether to use tqdm for logging
         distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
         action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        distance_loss_type: type of distance loss to use ("mse", "waypoint_spacing_scaled_mse")
     """
     model.eval()
     dist_loss_logger = Logger("dist_loss", eval_type)
@@ -593,6 +612,7 @@ def evaluate(
                 action_mask=action_mask,
                 distance_loss_coeff=distance_loss_coeff,
                 action_loss_type=action_loss_type,
+                distance_loss_type=distance_loss_type,
                 metric_waypoint_spacing=metric_waypoint_spacing,
             )
 

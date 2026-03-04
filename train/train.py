@@ -432,6 +432,10 @@ def main(config):
     if "action_loss_type" not in config:
         config["action_loss_type"] = "mse"
 
+    # Set default distance loss type if not specified
+    if "distance_loss_type" not in config:
+        config["distance_loss_type"] = "mse"
+
     if config["model_type"] in ["gnm", "vint", "vint_dino", "vint_da"]:
         train_eval_loop(
             train_model=config["train"],
@@ -460,6 +464,7 @@ def main(config):
             max_high_loss_samples=config.get("max_high_loss_samples", 10),
             distance_loss_coeff=config["distance_loss_coeff"],
             action_loss_type=config["action_loss_type"],
+            distance_loss_type=config["distance_loss_type"],
         )
     elif config["model_type"] == "nomad":
         train_eval_loop_nomad(
@@ -514,6 +519,9 @@ if __name__ == "__main__":
         help="If set, will use a smaller subset of the data and fewer epochs for quick testing",
     )
     args = parser.parse_args()
+
+    if args.debug:
+        torch.autograd.set_detect_anomaly(True)
 
     with open("config/defaults.yaml", "r") as f:
         default_config = yaml.safe_load(f)

@@ -46,6 +46,7 @@ def train_eval_loop(
     max_high_loss_samples: int = 10,
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
+    distance_loss_type: str = "mse",
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -77,6 +78,7 @@ def train_eval_loop(
         max_high_loss_samples: maximum number of high loss samples to log per epoch
         distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
         action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        distance_loss_type: type of distance loss to use ("mse", "waypoint_spacing_scaled_mse")
     """
     assert 0 <= alpha <= 1
     latest_path = os.path.join(project_folder, f"latest.pth")
@@ -108,6 +110,7 @@ def train_eval_loop(
                 max_high_loss_samples=max_high_loss_samples,
                 distance_loss_coeff=distance_loss_coeff,
                 action_loss_type=action_loss_type,
+                distance_loss_type=distance_loss_type,
             )
 
         gc.collect()
@@ -136,6 +139,7 @@ def train_eval_loop(
                 use_wandb=use_wandb,
                 eval_fraction=eval_fraction,
                 action_loss_type=action_loss_type,
+                distance_loss_type=distance_loss_type,
             )
 
             avg_total_test_loss.append(total_eval_loss)
