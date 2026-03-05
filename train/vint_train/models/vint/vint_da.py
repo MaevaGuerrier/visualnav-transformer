@@ -155,10 +155,10 @@ class ViNTWithDepthAnything(BaseModel):
         nn.init.normal_(self.readout_tokens, std=0.02)
         
         # Spatial positional encoding for image tokens
-        self.spatial_temporal_embedding = nn.Parameter(
+        self.temporal_embedding = nn.Parameter(
             torch.zeros(1, self.context_size + 1, self.encoding_size, 1)
         )
-        nn.init.normal_(self.spatial_temporal_embedding, std=0.02)
+        nn.init.normal_(self.temporal_embedding, std=0.02)
         
         # RoPE positional encoding (if using rope)
         if positional_encoding_type == "rope":
@@ -318,8 +318,8 @@ class ViNTWithDepthAnything(BaseModel):
         projected_features = projected_features.view(batch_size, S, self.encoding_size, num_spatial_tokens)
         
         # Add spatial-temporal positional encoding
-        if self.positional_encoding_type in ["peg", "temporal_before_dino"]:
-            projected_features = projected_features + self.spatial_temporal_embedding
+        if self.positional_encoding_type in ["peg", "rope"]:
+            projected_features = projected_features + self.temporal_embedding
         
         # Apply RoPE if enabled
         if self.positional_encoding_type == "rope":
