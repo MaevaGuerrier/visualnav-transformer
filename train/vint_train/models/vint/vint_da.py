@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict, Optional, Tuple
 from vint_train.models.base_model import BaseModel
-from vint_train.models.vint.self_attention import TransformerEncoder
+from vint_train.models.vint.self_attention import TransformerEncoder, RoFormer
+from vint_train.models.vint.rope import RotaryPositionEmbedding2D
 
 from depth_anything_3.api import DepthAnything3
 from einops import rearrange
@@ -55,6 +56,27 @@ class VisionProjector(nn.Module):
             tokens = f_1
         return tokens.reshape(tokens.shape[0], self.output_dim, -1)
 
+class DepthAnythingDINOWrapper(nn.Module):
+    """
+    Wrapper around Depth-Anything's DINO backbone
+    """
+    def __init__(self, dino_backbone: nn.Module):
+        super(DepthAnythingDINOWrapper, self).__init__()
+        dino_backbone.out_layers = 1 # Last layer only
+        self.dino_backbone = dino_backbone
+        self.embed_dim = dino_backbone.pretrained.embed_dim
+        self.patch_size = dino_backbone.pretrained.patch_size
+        self.num_register_tokens = dino_backbone.pretrained.num_register_tokens
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, S, 3, H, W) tensor of input images
+        Returns:
+            features: (B, S, num_patches, embed_dim) tensor of DINO features
+        """
+        features, _ = self.dino_backbone(x)
+        return features[0][0]
 
 class ViNTWithDepthAnything(BaseModel):
     """
@@ -109,7 +131,7 @@ class ViNTWithDepthAnything(BaseModel):
         self.add_temporal_pe_dino = add_temporal_pe_dino
         # Load Depth-Anything model and extract DINOv2 backbone
         self.da_model = DepthAnything3.from_pretrained(obs_encoder)
-        self.vision_encoder = self.da_model.model.backbone.pretrained
+        self.vision_encoder = DepthAnythingDINOWrapper(self.da_model.model.backbone)
         self.vision_encoder.eval()
         
         # Get DINO config
@@ -126,8 +148,8 @@ class ViNTWithDepthAnything(BaseModel):
         self.num_special_tokens = 1 + self.num_register_tokens
         
         # Vision projector: projects from DINO dim to encoding_size with downsampling
-        assert positional_encoding_type in ["peg", "sinusoidal", "rope"], \
-            "positional_encoding_type must be one of 'peg', 'sinusoidal', 'rope'"
+        assert positional_encoding_type in ["peg", "sinusoidal", "rope", "temporal_only"], \
+            f"Unsupported positional encoding type: {positional_encoding_type}"
         
         self.positional_encoding_type = positional_encoding_type
         
@@ -139,12 +161,6 @@ class ViNTWithDepthAnything(BaseModel):
         )
         
         # Temporal positional encoding (added before DINO if add_temporal_pe is True)
-        if self.add_temporal_pe_dino:
-            # Learnable temporal embeddings for each timestep
-            self.temporal_pe_dino = nn.Parameter(
-                torch.zeros(1, self.context_size + 1, self.embed_dim)
-            )
-            nn.init.normal_(self.temporal_pe_dino, std=0.02)
         
         # Readout tokens for aggregating information
         num_readout_tokens = 2 if self.separate_tokens_and_heads else 1
@@ -160,105 +176,78 @@ class ViNTWithDepthAnything(BaseModel):
         )
         nn.init.normal_(self.temporal_embedding, std=0.02)
         
-        # RoPE positional encoding (if using rope)
-        if positional_encoding_type == "rope":
-            self.proj_grid_h = self.grid_h // 2  # After pooling in VisionProjector
-            self.proj_grid_w = self.grid_w // 2
-            
-            dim = self.encoding_size // 2
-            inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
-            
-            h = torch.arange(self.proj_grid_h).float()
-            w = torch.arange(self.proj_grid_w).float()
-            
-            freqs_h = torch.einsum("i,j->ij", h, inv_freq)
-            freqs_w = torch.einsum("i,j->ij", w, inv_freq)
-            
-            self.register_buffer("cos_h", torch.cat((freqs_h, freqs_h), dim=-1).cos())
-            self.register_buffer("sin_h", torch.cat((freqs_h, freqs_h), dim=-1).sin())
-            self.register_buffer("cos_w", torch.cat((freqs_w, freqs_w), dim=-1).cos())
-            self.register_buffer("sin_w", torch.cat((freqs_w, freqs_w), dim=-1).sin())
-        
         # Transformer decoder
         # Input: all image tokens from all timesteps + readout tokens
         num_spatial_tokens_per_image = (self.grid_h // 2) * (self.grid_w // 2)  # After pooling
         total_image_tokens = (self.context_size + 1) * num_spatial_tokens_per_image
         seq_len = total_image_tokens + num_readout_tokens
         
-        self.decoder = TransformerEncoder(
-            embed_dim=self.encoding_size,
-            seq_len=seq_len,
-            nhead=mha_num_attention_heads,
-            num_layers=mha_num_attention_layers,
-            ff_dim_factor=mha_ff_dim_factor,
-            apply_positional_encoding=(positional_encoding_type == "sinusoidal"),
-        )
+        # RoPE positional encoding (if using rope)
+        if positional_encoding_type == "rope":
+            self.proj_grid_h = self.grid_h // 2  # After pooling in VisionProjector
+            self.proj_grid_w = self.grid_w // 2
+            
+            # Create RoPE instance
+            self.rope = RotaryPositionEmbedding2D(frequency=100.0)
+            
+            # Precompute 2D position grid for all timesteps
+            S = self.context_size + 1
+            num_patches_per_image = self.proj_grid_h * self.proj_grid_w
+            
+            # Create position grid for one image: [(h, w) for all patches]
+            positions = torch.stack([
+                torch.tensor([h, w])
+                for h in range(self.proj_grid_h)
+                for w in range(self.proj_grid_w)
+            ])  # [num_patches_per_image, 2]
+            
+            # Expand for all timesteps
+            positions = positions.unsqueeze(0).expand(S, -1, -1)  # [S, num_patches_per_image, 2]
+            self.register_buffer('rope_positions', positions)
+            
+            # Create RoFormer decoder
+            self.decoder = RoFormer(
+                embed_dim=self.encoding_size,
+                nhead=mha_num_attention_heads,
+                num_layers=mha_num_attention_layers,
+                ff_dim_factor=mha_ff_dim_factor,
+                rope=self.rope,
+            )
+        else:
+            self.rope = None
+            self.decoder = TransformerEncoder(
+                embed_dim=self.encoding_size,
+                seq_len=seq_len,
+                nhead=mha_num_attention_heads,
+                num_layers=mha_num_attention_layers,
+                ff_dim_factor=mha_ff_dim_factor,
+                apply_positional_encoding=(positional_encoding_type == "sinusoidal"),
+            )
         
         # Output layers
-        self.output_layers = nn.Sequential(
-            nn.Linear(self.encoding_size, output_layers[0]),
-            nn.ReLU(),
-        )
-        for i in range(len(output_layers) - 1):
-            self.output_layers.append(nn.Linear(output_layers[i], output_layers[i + 1]))
-            self.output_layers.append(nn.ReLU())
+        if self.separate_tokens_and_heads:
+            # Separate output layers for distance and action
+            dist_layers = [nn.Linear(self.encoding_size, output_layers[0]), nn.ReLU()]
+            for i in range(len(output_layers) - 1):
+                dist_layers.extend([nn.Linear(output_layers[i], output_layers[i + 1]), nn.ReLU()])
+            self.dist_output_layers = nn.Sequential(*dist_layers)
+            
+            action_layers = [nn.Linear(self.encoding_size, output_layers[0]), nn.ReLU()]
+            for i in range(len(output_layers) - 1):
+                action_layers.extend([nn.Linear(output_layers[i], output_layers[i + 1]), nn.ReLU()])
+            self.action_output_layers = nn.Sequential(*action_layers)
+        else:
+            # Shared output layers
+            layers = [nn.Linear(self.encoding_size, output_layers[0]), nn.ReLU()]
+            for i in range(len(output_layers) - 1):
+                layers.extend([nn.Linear(output_layers[i], output_layers[i + 1]), nn.ReLU()])
+            self.output_layers = nn.Sequential(*layers)
         
         # Distance and action predictors
         self.dist_predictor = nn.Linear(output_layers[-1], 1)
         self.action_predictor = nn.Linear(
             output_layers[-1], self.len_trajectory_pred * self.num_action_params
         )
-    
-    def extract_dino_features(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Extract patch features from DINOv2 backbone.
-        
-        Args:
-            x: Input images (B*S, 3, H, W)
-        Returns:
-            patch_features: (B*S, num_patches, embed_dim) without CLS/reg tokens
-        """
-        B_S = x.shape[0]
-        
-        # Get patch embeddings
-        patches = self.vision_encoder.patch_embed(x)  # (B*S, num_patches, embed_dim)
-        
-        # Prepare CLS token
-        cls_tokens = self.vision_encoder.cls_token.expand(B_S, -1, -1)  # (B*S, 1, embed_dim)
-        
-        # Concatenate CLS + patches
-        tokens = torch.cat([cls_tokens, patches], dim=1)  # (B*S, 1 + num_patches, embed_dim)
-        
-        # Add positional embeddings
-        H, W = x.shape[-2:]
-        tokens = tokens + self.vision_encoder.interpolate_pos_encoding(tokens, W, H)
-        
-        # Add register tokens if present
-        if self.vision_encoder.register_tokens is not None:
-            register_tokens = self.vision_encoder.register_tokens.expand(B_S, -1, -1)
-            tokens = torch.cat([
-                tokens[:, :1],  # CLS
-                register_tokens,  # REGs
-                tokens[:, 1:]   # Patches
-            ], dim=1)
-
-        if self.add_temporal_pe_dino:
-            # Add temporal positional encoding to all tokens (including CLS/reg) before DINO blocks
-            temporal_pe_expanded = self.temporal_pe_dino.expand(B_S, -1, -1)  # (B*S, S+1, embed_dim)
-            temporal_pe_expanded = temporal_pe_expanded.reshape(B_S, 1, self.embed_dim)  # Broadcast to all tokens
-            tokens = tokens + temporal_pe_expanded
-        
-        # Pass through transformer blocks
-        for blk in self.vision_encoder.blocks:
-            tokens = blk(tokens)
-        
-        # Apply final norm
-        tokens = self.vision_encoder.norm(tokens)
-        
-        # Remove CLS and register tokens, keep only patch tokens
-        patch_features = tokens[:, self.num_special_tokens:, :]  # (B*S, num_patches, embed_dim)
-        
-        return patch_features
     
     def forward(
         self, obs_img: torch.Tensor, goal_img: torch.Tensor
@@ -293,21 +282,13 @@ class ViNTWithDepthAnything(BaseModel):
         S = self.context_size + 1
         all_images_batch = all_images.view(batch_size, S, 3, self.image_size[1], self.image_size[0])
         
-        # Flatten for DINO processing
-        all_images_flat = all_images_batch.view(batch_size * S, 3, self.image_size[1], self.image_size[0])
-        
-        # Extract DINO features (without CLS/reg tokens)
-        with torch.no_grad() if not self.training else torch.enable_grad():
-            dino_features = self.extract_dino_features(all_images_flat)  # (B*S, num_patches, embed_dim)
-        
-        # Add temporal PE if enabled (by adding to all patches of each timestep)
-        if self.add_temporal_pe:
-            temporal_pe_expanded = self.temporal_pe.view(1, S, 1, self.embed_dim).expand(batch_size, -1, self.num_patches, -1)
-            temporal_pe_expanded = temporal_pe_expanded.reshape(batch_size * S, self.num_patches, self.embed_dim)
-            dino_features = dino_features + temporal_pe_expanded
+        # Extract DINO features
+        dino_features = self.vision_encoder(
+            all_images_batch
+        )
         
         # Reshape to spatial format for projection: (B*S, embed_dim, grid_h, grid_w)
-        dino_features = dino_features.permute(0, 2, 1)  # (B*S, embed_dim, num_patches)
+        dino_features = dino_features.permute(0, 1, 3, 2)  # (B*S, num_patches, embed_dim) -> (B*S, embed_dim, num_patches)
         dino_features = dino_features.view(batch_size * S, self.embed_dim, self.grid_h, self.grid_w)
         
         # Apply vision projector (downsample + projection)
@@ -318,11 +299,11 @@ class ViNTWithDepthAnything(BaseModel):
         projected_features = projected_features.view(batch_size, S, self.encoding_size, num_spatial_tokens)
         
         # Add spatial-temporal positional encoding
-        if self.positional_encoding_type in ["peg", "rope"]:
+        if self.positional_encoding_type in ["peg", "rope", "temporal_only"]:
             projected_features = projected_features + self.temporal_embedding
         
-        # Apply RoPE if enabled
-        if self.positional_encoding_type == "rope":
+        # Apply manual RoPE for non-RoFormer case (deprecated, kept for compatibility)
+        if self.positional_encoding_type == "rope" and not hasattr(self, 'rope'):
             projected_features = projected_features.view(batch_size, S, self.encoding_size, self.proj_grid_h, self.proj_grid_w)
             
             img_h = projected_features[:, :, :self.encoding_size // 2, :, :]
@@ -343,24 +324,45 @@ class ViNTWithDepthAnything(BaseModel):
         image_tokens = projected_features.permute(0, 1, 3, 2)  # (B, S, num_spatial_tokens, encoding_size)
         image_tokens = image_tokens.reshape(batch_size, S * num_spatial_tokens, self.encoding_size)
         
-        # Expand and add readout tokens
+        # Expand readout tokens
         readout_tokens = self.readout_tokens.expand(batch_size, -1, -1)  # (B, num_readout_tokens, encoding_size)
-        all_tokens = torch.cat([image_tokens, readout_tokens], dim=1)  # (B, seq_len, encoding_size)
         
         # Pass through transformer decoder
-        encoded_tokens = self.decoder(all_tokens)  # (B, seq_len, encoding_size)
-        
-        # Extract readout token outputs
-        if self.separate_tokens_and_heads:
-            # Separate tokens for distance and action
-            dist_repr = self.output_layers(encoded_tokens[:, -2, :])  # Second to last token
-            action_repr = self.output_layers(encoded_tokens[:, -1, :])  # Last token
+        if self.positional_encoding_type == "rope" and self.rope is not None:
+            # Use RoFormer: expand precomputed positions to batch
+            positions = self.rope_positions.unsqueeze(0).expand(batch_size, -1, -1, -1)  # [B, S, num_patches, 2]
+            positions = positions.reshape(batch_size, -1, 2)  # [B, S * num_patches, 2]
             
+            # Process through RoFormer
+            _, readout_out = self.decoder(
+                rope_tokens=image_tokens,
+                rope_positions=positions,
+                other_tokens=readout_tokens
+            )
+            
+            # Extract readout token outputs
+            if self.separate_tokens_and_heads:
+                dist_repr = self.dist_output_layers(readout_out[:, 0, :])   # First readout token
+                action_repr = self.action_output_layers(readout_out[:, 1, :])  # Second readout token
+            else:
+                final_repr = self.output_layers(readout_out[:, 0, :])  # Only readout token
+        else:
+            # Use TransformerEncoder: concatenate all tokens
+            all_tokens = torch.cat([image_tokens, readout_tokens], dim=1)  # (B, seq_len, encoding_size)
+            encoded_tokens = self.decoder(all_tokens)  # (B, seq_len, encoding_size)
+            
+            # Extract readout token outputs
+            if self.separate_tokens_and_heads:
+                dist_repr = self.dist_output_layers(encoded_tokens[:, -2, :])  # Second to last token
+                action_repr = self.action_output_layers(encoded_tokens[:, -1, :])  # Last token
+            else:
+                final_repr = self.output_layers(encoded_tokens[:, -1, :])  # Last token
+        
+        # Generate predictions
+        if self.separate_tokens_and_heads:
             dist_pred = self.dist_predictor(dist_repr)
             action_pred = self.action_predictor(action_repr)
         else:
-            # Shared token for both predictions
-            final_repr = self.output_layers(encoded_tokens[:, -1, :])
             dist_pred = self.dist_predictor(final_repr)
             action_pred = self.action_predictor(final_repr)
         
