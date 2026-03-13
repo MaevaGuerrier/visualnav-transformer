@@ -31,6 +31,9 @@ context_size: 5
 # tradeoff between action and distance prediction loss
 alpha: 0.5
 
+# action loss type: "mse", "mape", or "waypoint_spacing_scaled_mse"
+action_loss_type: mse
+
 # tradeoff between task loss and kld
 beta: 0.1
 

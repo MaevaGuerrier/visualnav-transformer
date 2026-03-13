@@ -36,10 +36,10 @@ mha_num_attention_heads: 4
 mha_num_attention_layers: 4
 mha_ff_dim_factor: 4
 positional_encoding_type: "rope"
-output_layers: [256, 512]
+output_layers: [128, 64, 32]
 
 # normalization for the action space
-normalize: False
+normalize: True
 
 # context
 context_type: temporal
@@ -121,6 +121,6 @@ pairwise_test_freq: 0 # in epochs
 eval_fraction: 0.25
 wandb_log_freq: 10 # in iterations
 eval_freq: 1 # in epochs
-log_high_loss_samples: True
+log_high_loss_samples: False
 high_loss_threshold: 2.0
 max_high_loss_samples: 10
