@@ -48,6 +48,8 @@ class ViNT_Dataset(Dataset):
         image_aug_params: Dict[str, Any] = {},
         learn_metric_distance: bool = False,
         metric_distance_for_negatives: bool = False,
+        fluctuate_actions: bool = False,
+        action_fluctuation_amount: float = 0.2,
     ):
         """
         Main ViNT dataset class
@@ -130,6 +132,8 @@ class ViNT_Dataset(Dataset):
         self.goal_type = goal_type
         self.learn_metric_distance = learn_metric_distance
         self.metric_distance_for_negatives = metric_distance_for_negatives
+        self.fluctuate_actions = fluctuate_actions
+        self.action_fluctuation_amount = action_fluctuation_amount
 
         # load data/data_config.yaml
         with open(
@@ -325,6 +329,73 @@ class ViNT_Dataset(Dataset):
 
         return actions, goal_pos
     
+    def _compute_action_history(self, traj_data, curr_time):
+        """
+        Compute the action history for the context observations.
+        
+        For each context observation at time t, compute the action (waypoint)
+        from t to t+waypoint_spacing. This represents the action that was
+        executed from that observation.
+        
+        Args:
+            traj_data: Dictionary containing trajectory data (position, yaw)
+            curr_time: Current timestep (the last context observation)
+            
+        Returns:
+            action_history: numpy array of shape (context_size, num_action_params)
+        """
+        # Compute the time indices for context observations
+        # context_times includes curr_time, so we need context_size steps before it
+        context_times = list(
+            range(
+                curr_time - self.context_size * self.waypoint_spacing,
+                curr_time,
+                self.waypoint_spacing,
+            )
+        )
+        
+        action_history = []
+        traj_len = len(traj_data["position"])
+        
+        for t in context_times:
+            # Compute action from t to t+waypoint_spacing
+            start_idx = t
+            end_idx = min(t + self.waypoint_spacing, traj_len - 1)
+            
+            start_pos = traj_data["position"][start_idx]
+            end_pos = traj_data["position"][end_idx]
+            start_yaw = traj_data["yaw"][start_idx]
+            end_yaw = traj_data["yaw"][end_idx]
+            
+            if len(start_yaw.shape) == 2:
+                start_yaw = start_yaw.squeeze()
+            if len(end_yaw.shape) == 2:
+                end_yaw = end_yaw.squeeze()
+            
+            # Transform to local coordinates
+            start_pos_local = np.array([0, 0])  # Origin in local frame
+            end_pos_local = to_local_coords(end_pos, start_pos, start_yaw)
+            
+            if self.learn_angle:
+                # Compute yaw difference
+                yaw_diff = end_yaw - start_yaw
+                action = np.concatenate([end_pos_local, [yaw_diff]])
+            else:
+                action = end_pos_local
+            
+            action_history.append(action)
+        
+        action_history = np.array(action_history, dtype=np.float32)
+        
+        # Normalize if needed (same as future actions)
+        if self.normalize:
+            action_history[:, :2] /= self.data_config["metric_waypoint_spacing"] * self.waypoint_spacing
+        
+        assert action_history.shape == (self.context_size, self.num_action_params), \
+            f"action_history shape {action_history.shape} != {(self.context_size, self.num_action_params)}"
+        
+        return action_history
+    
     def _get_trajectory(self, trajectory_name):
         if trajectory_name in self.trajectory_cache:
             return self.trajectory_cache[trajectory_name]
@@ -347,12 +418,16 @@ class ViNT_Dataset(Dataset):
         Args:
             i (int): index to ith datapoint
         Returns:
-            Tuple of tensors containing the context, observation, goal, transformed context, transformed observation, transformed goal, distance label, and action label
-                obs_image (torch.Tensor): tensor of shape [3, H, W] containing the image of the robot's observation
+            Tuple of tensors containing:
+                obs_image (torch.Tensor): tensor of shape [(context_size+1)*3, H, W] containing context images
                 goal_image (torch.Tensor): tensor of shape [3, H, W] containing the subgoal image 
-                dist_label (torch.Tensor): tensor of shape (1,) containing the distance labels from the observation to the goal
-                action_label (torch.Tensor): tensor of shape (5, 2) or (5, 4) (if training with angle) containing the action labels from the observation to the goal
-                which_dataset (torch.Tensor): index of the datapoint in the dataset [for identifying the dataset for visualization when using multiple datasets]
+                action_label (torch.Tensor): tensor of shape (len_traj_pred, num_action_params) containing future actions
+                dist_label (torch.Tensor): tensor of shape (1,) containing the distance from observation to goal
+                goal_pos (torch.Tensor): tensor of shape (2,) containing goal position in local coords
+                dataset_index (torch.Tensor): index of the dataset for multi-dataset training
+                action_mask (torch.Tensor): tensor of shape (1,) indicating if action should be used for loss
+                metric_waypoint_spacing (torch.Tensor): metric spacing between waypoints for this dataset
+                action_history (torch.Tensor): tensor of shape (context_size, num_action_params) containing past actions
         """
         f_curr, curr_time, max_goal_dist = self.index_to_data[i]
         f_goal, goal_time, goal_is_negative = self._sample_goal(f_curr, curr_time, max_goal_dist)
@@ -388,8 +463,11 @@ class ViNT_Dataset(Dataset):
         goal_traj_len = len(goal_traj_data["position"])
         assert goal_time < goal_traj_len, f"{goal_time} an {goal_traj_len}"
 
-        # Compute actions
+        # Compute actions (future trajectory)
         actions, goal_pos = self._compute_actions(curr_traj_data, curr_time, goal_time)
+        
+        # Compute action history for context observations
+        action_history = self._compute_action_history(curr_traj_data, curr_time)
 
         if self.flip_aug:
             if np.random.rand() < 0.5:
@@ -413,6 +491,12 @@ class ViNT_Dataset(Dataset):
                 obs_image_transformed[f"image{i if i > 0 else ''}"] for i in range(self.context_size+1)
             ])
 
+        if self.fluctuate_actions:
+            assert self.normalize, "Action fluctuation should only be used when actions are normalized"
+            scale = 1 + np.random.uniform(-self.action_fluctuation_amount, self.action_fluctuation_amount)
+            actions[:, :2] *= scale
+            action_history[:, :2] *= scale
+
         #self._save_images(obs_image, goal_image, i)
         
         # Compute distances
@@ -432,6 +516,11 @@ class ViNT_Dataset(Dataset):
         if self.learn_angle:
             actions_torch = calculate_sin_cos(actions_torch)
         
+        # Convert action_history to tensor and apply sin/cos encoding if needed
+        action_history_torch = torch.as_tensor(action_history, dtype=torch.float32)
+        if self.learn_angle:
+            action_history_torch = calculate_sin_cos(action_history_torch)
+        
         action_mask = (
             (distance < self.max_action_distance) and
             (distance > self.min_action_distance) and
@@ -450,6 +539,7 @@ class ViNT_Dataset(Dataset):
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
             torch.as_tensor(self.metric_waypoint_spacing, dtype=torch.float32),
+            action_history_torch,
         )
 
     def _save_images(self, obs_image: torch.Tensor, goal_image: torch.Tensor, index: int) -> None:

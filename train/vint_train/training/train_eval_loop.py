@@ -47,6 +47,7 @@ def train_eval_loop(
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
     distance_loss_type: str = "mse",
+    pass_action_history: bool = False
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -111,6 +112,7 @@ def train_eval_loop(
                 distance_loss_coeff=distance_loss_coeff,
                 action_loss_type=action_loss_type,
                 distance_loss_type=distance_loss_type,
+                pass_action_history=pass_action_history
             )
 
         gc.collect()
@@ -140,6 +142,7 @@ def train_eval_loop(
                 eval_fraction=eval_fraction,
                 action_loss_type=action_loss_type,
                 distance_loss_type=distance_loss_type,
+                pass_action_history=pass_action_history
             )
 
             avg_total_test_loss.append(total_eval_loss)

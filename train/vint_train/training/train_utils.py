@@ -332,6 +332,7 @@ def train(
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
     distance_loss_type: str = "mse",
+    pass_action_history: bool = False
 ):
     """
     Train the model for one epoch.
@@ -403,6 +404,7 @@ def train(
             dataset_index,
             action_mask,
             metric_waypoint_spacing,
+            action_history,
         ) = data
 
         obs_images = torch.split(obs_image, 3, dim=1)
@@ -413,7 +415,11 @@ def train(
         viz_goal_image = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE)
         
         goal_image = transform(goal_image).to(device)
-        model_outputs = model(obs_image, goal_image)
+        action_history = action_history.to(device)
+        if pass_action_history:
+            model_outputs = model(obs_image, goal_image, action_history)
+        else:
+            model_outputs = model(obs_image, goal_image)
 
         dist_label = dist_label.to(device)
         action_label = action_label.to(device)
@@ -519,6 +525,7 @@ def evaluate(
     distance_loss_coeff: float = 0.01,
     action_loss_type: str = "mse",
     distance_loss_type: str = "mse",
+    pass_action_history: bool = False
 ):
     """
     Evaluate the model on the given evaluation dataset.
@@ -583,6 +590,7 @@ def evaluate(
                 dataset_index,
                 action_mask,
                 metric_waypoint_spacing,
+                action_history,
             ) = data
 
             obs_images = torch.split(obs_image, 3, dim=1)
@@ -593,7 +601,12 @@ def evaluate(
             viz_goal_image = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE)
 
             goal_image = transform(goal_image).to(device)
-            model_outputs = model(obs_image, goal_image)
+            
+            action_history = action_history.to(device)
+            if pass_action_history:
+                model_outputs = model(obs_image, goal_image, action_history)
+            else:
+                model_outputs = model(obs_image, goal_image)
 
             dist_label = dist_label.to(device)
             action_label = action_label.to(device)
@@ -904,7 +917,9 @@ def train_nomad(
                 distance,
                 goal_pos,
                 dataset_idx,
-                action_mask, 
+                action_mask,
+                metric_waypoint_spacing,
+                action_history,
             ) = data
             
             obs_images = torch.split(obs_image, 3, dim=1)
@@ -1145,6 +1160,8 @@ def evaluate_nomad(
                 goal_pos,
                 dataset_idx,
                 action_mask,
+                metric_waypoint_spacing,
+                action_history,
             ) = data
             
             obs_images = torch.split(obs_image, 3, dim=1)

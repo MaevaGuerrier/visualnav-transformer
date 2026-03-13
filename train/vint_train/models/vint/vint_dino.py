@@ -60,12 +60,15 @@ class ViNTWithDINOTokens(BaseModel):
         output_layers: List[int] = [256, 128, 64, 32],
         positional_encoding_type: str = "peg",
         separate_tokens_and_heads: bool = False,
+        take_action_history: bool = False,
+        action_enc_layers: List[int] = [128, 256]
     ) -> None:
         super(ViNTWithDINOTokens, self).__init__(context_size, len_traj_pred, learn_angle)
         self.encoding_size = encoding_size
         self.image_size = image_size
         self.context_size = context_size
         self.separate_tokens_and_heads = separate_tokens_and_heads
+        self.take_action_history = take_action_history
 
         if "dino" in obs_encoder:
             self.vision_encoder = AutoModel.from_pretrained(obs_encoder)
@@ -173,8 +176,15 @@ class ViNTWithDINOTokens(BaseModel):
             nn.Linear(output_layers[-1], self.len_trajectory_pred * self.num_action_params),
         )
 
+        action_enc_layers += [self.encoding_size]  # Ensure final layer matches decoder embedding size
+        if self.take_action_history:
+            self.action_history_layers = [nn.Linear(4 if self.learn_angle else 2, action_enc_layers[0]), nn.ReLU()]
+            for i in range(len(action_enc_layers) - 1):
+                self.action_history_layers.extend([nn.Linear(action_enc_layers[i], action_enc_layers[i + 1]), nn.ReLU()])
+            self.action_history_encoder = nn.Sequential(*self.action_history_layers)
+
     def forward(
-        self, obs_img: torch.Tensor, goal_img: torch.Tensor,
+        self, obs_img: torch.Tensor, goal_img: torch.Tensor, action_history: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         batch_size = obs_img.shape[0]
@@ -205,8 +215,15 @@ class ViNTWithDINOTokens(BaseModel):
         goal_tokens = vision_encodings[batch_size*self.context_size:, None, :, :]
         image_tokens = torch.cat([obs_tokens, goal_tokens], dim=1) 
 
+        action_avail = self.take_action_history and action_history is not None
+        if action_avail:
+            # remove last action from history for encoding, as it corresponds to the current step
+            action_history_emb = self.action_history_encoder(action_history[:, :-1])  # [B, context_size, action_enc_layers[-1]]
+
         if self.positional_encoding_type in ["peg", "rope", "temporal_only"]:
             image_tokens = image_tokens + self.temporal_embedding
+            if action_avail:
+                action_history_emb = action_history_emb + self.temporal_embedding[:, :self.context_size-1, :, 0]
         
         # Apply manual RoPE for non-RoFormer case (deprecated, kept for compatibility)
         if self.positional_encoding_type == "rope" and not hasattr(self, 'rope'):
@@ -241,10 +258,15 @@ class ViNTWithDINOTokens(BaseModel):
             # Get both readout tokens
             dist_token_emb = self.dist_token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]
             action_token_emb = self.action_token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]
-            readout_tokens = torch.cat([dist_token_emb, action_token_emb], dim=1)  # [B, 2, C]
+            non_image_tokens = torch.cat([dist_token_emb, action_token_emb], dim=1)  # [B, 2, C]
         else:
             # Shared token for both predictions
-            readout_tokens = self.token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]  # [B, 1, C]
+            non_image_tokens = self.token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]  # [B, 1, C]
+
+        if action_avail:
+            non_image_tokens = torch.cat([non_image_tokens, action_history_emb], dim=1)  # [B, num_readout_tokens + context_size - 1, C]
+
+        
         
         # Run encoder with RoFormer or TransformerEncoder
         if self.positional_encoding_type == "rope" and self.rope is not None:
@@ -256,7 +278,7 @@ class ViNTWithDINOTokens(BaseModel):
             _, readout_out = self.decoder(
                 rope_tokens=image_tokens_flat,
                 rope_positions=positions,
-                other_tokens=readout_tokens
+                other_tokens=non_image_tokens
             )
             
             if self.separate_tokens_and_heads:
@@ -266,7 +288,7 @@ class ViNTWithDINOTokens(BaseModel):
                 final_repr = self.output_layers(readout_out[:, 0, :])
         else:
             # Use TransformerEncoder: concatenate all tokens
-            tokens = torch.cat([image_tokens_flat, readout_tokens], dim=1)
+            tokens = torch.cat([image_tokens_flat, non_image_tokens], dim=1)
             encoded_tokens = self.decoder(tokens)
             
             if self.separate_tokens_and_heads:

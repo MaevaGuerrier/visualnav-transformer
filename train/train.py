@@ -141,6 +141,8 @@ def main(config):
                         image_aug_params=config["image_aug_params"] if "image_aug_params" in config and data_split_type=="train" else {},
                         learn_metric_distance=config["learn_metric_distance"],
                         metric_distance_for_negatives=config["metric_distance_for_negatives"],
+                        fluctuate_actions=config.get("fluctuate_actions", False) if data_split_type=="train" else False,
+                        action_fluctuation_amount=config.get("action_fluctuation_amount", 0.2),
                     )
                     if data_split_type == "train":
                         train_dataset.append(dataset)
@@ -219,6 +221,8 @@ def main(config):
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
             output_layers=config["output_layers"],
             separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
+            take_action_history=config.get("take_action_history", False),
+            action_enc_layers=config.get("action_enc_layers", [256]),
         )
     elif config["model_type"] == "vint_da":
         model = ViNTWithDepthAnything(
@@ -465,6 +469,7 @@ def main(config):
             distance_loss_coeff=config["distance_loss_coeff"],
             action_loss_type=config["action_loss_type"],
             distance_loss_type=config["distance_loss_type"],
+            pass_action_history=config.get("take_action_history", False),
         )
     elif config["model_type"] == "nomad":
         train_eval_loop_nomad(
