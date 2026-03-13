@@ -35,6 +35,7 @@ from diffusers.training_utils import EMAModel
 from vint_train.models.gnm.gnm import GNM
 from vint_train.models.vint.vint import ViNT
 from vint_train.models.vint.vint_dino import ViNTWithDINOTokens
+from vint_train.models.vint.vint_da import ViNTWithDepthAnything
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
@@ -44,6 +45,7 @@ from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1
 # Data and training imports
 from vint_train.data.vint_dataset import ViNT_Dataset
 from vint_train.training.train_eval_loop import load_model
+from vint_train.training.train_utils import _compute_losses
 from vint_train.visualizing.visualize_utils import to_numpy, numpy_to_img
 from vint_train.visualizing.action_utils import compare_waypoints_pred_to_label, plot_trajs_and_points
 from vint_train.visualizing.distance_utils import visualize_dist_pred
@@ -133,6 +135,24 @@ def create_model(config: Dict[str, Any], device: torch.device) -> nn.Module:
             mha_num_attention_heads=config["mha_num_attention_heads"],
             mha_num_attention_layers=config["mha_num_attention_layers"],
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
+            output_layers=config["output_layers"],
+            separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
+        )
+    elif model_type == "vint_da":
+        model = ViNTWithDepthAnything(
+            image_size=config["image_size"],
+            context_size=config["context_size"],
+            len_traj_pred=config["len_traj_pred"],
+            learn_angle=config["learn_angle"],
+            obs_encoder=config["obs_encoder"],
+            encoding_size=config["obs_encoding_size"],
+            mha_num_attention_heads=config["mha_num_attention_heads"],
+            mha_num_attention_layers=config["mha_num_attention_layers"],
+            mha_ff_dim_factor=config["mha_ff_dim_factor"],
+            output_layers=config["output_layers"],
+            positional_encoding_type=config.get("positional_encoding_type", "peg"),
+            separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
+            add_temporal_pe=config.get("add_temporal_pe", False),
         )
     elif model_type == "nomad":
         if config["vision_encoder"] == "nomad_vint":
@@ -189,6 +209,10 @@ def load_datasets(eval_config: Dict[str, Any], model_config: Dict[str, Any]) -> 
     # Get context type
     context_type = model_config.get("context_type", "temporal")
     
+    # Get metric distance settings
+    learn_metric_distance = model_config.get("learn_metric_distance", False)
+    metric_distance_for_negatives = model_config.get("metric_distance_for_negatives", False)
+    
     for dataset_name, dataset_cfg in eval_config["datasets"].items():
         # Set defaults
         waypoint_spacing = dataset_cfg.get("waypoint_spacing", 1)
@@ -217,6 +241,8 @@ def load_datasets(eval_config: Dict[str, Any], model_config: Dict[str, Any]) -> 
             goal_type=model_config.get("goal_type", "image"),
             flip_aug=False,  # No augmentation during eval
             image_aug=False,
+            learn_metric_distance=learn_metric_distance,
+            metric_distance_for_negatives=metric_distance_for_negatives,
         )
         
         # Get batch size
@@ -250,62 +276,45 @@ def compute_losses(
     action_mask: torch.Tensor,
     distance_loss_coeff: float = 0.01,
     action_scale: Optional[float] = None,
+    action_loss_type: str = "mse",
+    distance_loss_type: str = "mse",
+    metric_waypoint_spacing: Optional[torch.Tensor] = None,
 ) -> Dict[str, float]:
-    """Compute evaluation losses.
+    """Compute evaluation losses by wrapping _compute_losses from train_utils.
     
     Args:
         distance_loss_coeff: coefficient to multiply the distance loss (default: 0.01)
         action_scale: scaling factor to apply to action predictions (default: None, means 1.0)
+        action_loss_type: type of action loss to use ("mse", "mape", "waypoint_spacing_scaled_mse")
+        distance_loss_type: type of distance loss to use ("mse", "waypoint_spacing_scaled_mse")
+        metric_waypoint_spacing: per-sample metric waypoint spacing, required for "waypoint_spacing_scaled_mse"
     Returns:
         Dictionary of metrics including 'action_scale'
     """
-    with torch.no_grad():
-        dist_loss = F.mse_loss(dist_pred.squeeze(-1), dist_label.float())
-        
-        # Apply action scaling if provided
-        if action_scale is not None and action_scale != 1.0:
-            action_pred_scaled = action_pred * action_scale
-        else:
-            action_pred_scaled = action_pred
-        
-        def action_reduce(unreduced_loss: torch.Tensor):
-            while unreduced_loss.dim() > 1:
-                unreduced_loss = unreduced_loss.mean(dim=-1)
-            return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
-        
-        action_loss = action_reduce(F.mse_loss(action_pred_scaled, action_label, reduction="none"))
-        
-        action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-            action_pred_scaled[:, :, :2], action_label[:, :, :2], dim=-1
-        ))
-        multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-            torch.flatten(action_pred_scaled[:, :, :2], start_dim=1),
-            torch.flatten(action_label[:, :, :2], start_dim=1),
-            dim=-1,
-        ))
-        
-        results = {
-            "dist_loss": dist_loss.item(),
-            "action_loss": action_loss.item(),
-            "action_waypts_cos_sim": action_waypts_cos_sim.item(),
-            "multi_action_waypts_cos_sim": multi_action_waypts_cos_sim.item(),
-            "action_scale": action_scale,
-        }
-        
-        if learn_angle:
-            action_orien_cos_sim = action_reduce(F.cosine_similarity(
-                action_pred_scaled[:, :, 2:], action_label[:, :, 2:], dim=-1
-            ))
-            multi_action_orien_cos_sim = action_reduce(F.cosine_similarity(
-                torch.flatten(action_pred_scaled[:, :, 2:], start_dim=1),
-                torch.flatten(action_label[:, :, 2:], start_dim=1),
-                dim=-1,
-            ))
-            results["action_orien_cos_sim"] = action_orien_cos_sim.item()
-            results["multi_action_orien_cos_sim"] = multi_action_orien_cos_sim.item()
-        
-        total_loss = alpha * distance_loss_coeff * dist_loss + (1 - alpha) * action_loss
-        results["total_loss"] = total_loss.item()
+    # Apply external action scaling if provided (for auto_scale_actions feature)
+    if action_scale is not None and action_scale != 1.0:
+        action_pred_scaled = action_pred * action_scale
+    else:
+        action_pred_scaled = action_pred
+    
+    losses = _compute_losses(
+        dist_label=dist_label,
+        action_label=action_label,
+        dist_pred=dist_pred,
+        action_pred=action_pred_scaled,
+        alpha=alpha,
+        learn_angle=learn_angle,
+        action_mask=action_mask,
+        return_per_sample=False,
+        distance_loss_coeff=distance_loss_coeff,
+        action_loss_type=action_loss_type,
+        distance_loss_type=distance_loss_type,
+        metric_waypoint_spacing=metric_waypoint_spacing,
+    )
+    
+    # Convert to Python floats and add action_scale
+    results = {k: v.item() if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
+    results["action_scale"] = action_scale
     
     return results
 
@@ -417,7 +426,7 @@ def _compute_optimal_action_scale(
     
     pbar = tqdm.tqdm(dataloader, desc="Computing optimal scale", leave=False)
     for batch_data in pbar:
-        obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask = batch_data
+        obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask, metric_waypoint_spacing, action_history = batch_data
         
         # Process images
         obs_images = torch.split(obs_image, 3, dim=1)
@@ -475,6 +484,8 @@ def evaluate_model(
     model.eval()
     alpha = model_config.get("alpha", 0.5)
     distance_loss_coeff = model_config.get("distance_loss_coeff", 0.01)
+    action_loss_type = model_config.get("action_loss_type", "mse")
+    distance_loss_type = model_config.get("distance_loss_type", "mse")
     learn_angle = model_config["learn_angle"]
     normalized = model_config["normalize"]
     model_type = model_config["model_type"]
@@ -525,11 +536,7 @@ def evaluate_model(
             
             pbar = tqdm.tqdm(dataloader, desc=f"Eval {dataset_name}")
             for batch_idx, batch_data in enumerate(pbar):
-                # Unpack batch (different for nomad vs others)
-                if model_type == "nomad":
-                    obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask = batch_data
-                else:
-                    obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask = batch_data
+                obs_image, goal_image, action_label, dist_label, goal_pos, dataset_index, action_mask, metric_waypoint_spacing, action_history = batch_data
                 
                 batch_size = obs_image.shape[0]
                 
@@ -546,6 +553,7 @@ def evaluate_model(
                 dist_label = dist_label.to(device)
                 action_label = action_label.to(device)
                 action_mask = action_mask.to(device)
+                metric_waypoint_spacing = metric_waypoint_spacing.to(device)
                 
                 # Forward pass
                 if model_type == "nomad":
@@ -565,6 +573,9 @@ def evaluate_model(
                         action_mask=action_mask,
                         distance_loss_coeff=distance_loss_coeff,
                         action_scale=dataset_action_scale,
+                        action_loss_type=action_loss_type,
+                        distance_loss_type=distance_loss_type,
+                        metric_waypoint_spacing=metric_waypoint_spacing,
                     )
                 
                 # Accumulate metrics
