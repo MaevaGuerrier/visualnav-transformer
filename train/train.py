@@ -220,6 +220,7 @@ def main(config):
             mha_num_attention_layers=config["mha_num_attention_layers"],
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
             output_layers=config["output_layers"],
+            positional_encoding_type=config.get("positional_encoding_type", "peg"),
             separate_tokens_and_heads=config.get("separate_tokens_and_heads", False),
             take_action_history=config.get("take_action_history", False),
             action_enc_layers=config.get("action_enc_layers", [256]),
