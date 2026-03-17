@@ -166,7 +166,7 @@ def main(config):
         num_workers=config["num_workers"],
         prefetch_factor=config["prefetch_factor"],
         drop_last=False,
-        persistent_workers=True,
+        persistent_workers=config.get("persistent_workers", True),
         pin_memory=True
     )
 
@@ -179,7 +179,7 @@ def main(config):
         test_dataloaders[dataset_type] = DataLoader(
             dataset,
             batch_size=config["eval_batch_size"],
-            shuffle=True,
+            shuffle=False,
             #num_workers=config["num_workers"],
             num_workers =0, # To avoid OOM
             persistent_workers=False,
