@@ -135,7 +135,8 @@ class ViNTWithDepthAnything(BaseModel):
         self.vision_encoder.eval()
         
         # Get DINO config
-        self.embed_dim = self.vision_encoder.embed_dim
+        # There seem to be a mismatch with DA3-SMALL
+        self.embed_dim = 768 if "SMALL" in obs_encoder else self.vision_encoder.embed_dim
         self.patch_size = self.vision_encoder.patch_size
         self.num_register_tokens = self.vision_encoder.num_register_tokens
         
@@ -302,24 +303,6 @@ class ViNTWithDepthAnything(BaseModel):
         if self.positional_encoding_type in ["peg", "rope", "temporal_only"]:
             projected_features = projected_features + self.temporal_embedding
         
-        # Apply manual RoPE for non-RoFormer case (deprecated, kept for compatibility)
-        if self.positional_encoding_type == "rope" and not hasattr(self, 'rope'):
-            projected_features = projected_features.view(batch_size, S, self.encoding_size, self.proj_grid_h, self.proj_grid_w)
-            
-            img_h = projected_features[:, :, :self.encoding_size // 2, :, :]
-            img_w = projected_features[:, :, self.encoding_size // 2:, :, :]
-            
-            c_h = self.cos_h.T.reshape(1, 1, -1, self.proj_grid_h, 1)
-            s_h = self.sin_h.T.reshape(1, 1, -1, self.proj_grid_h, 1)
-            img_h = (img_h * c_h) + (rotate_half(img_h) * s_h)
-            
-            c_w = self.cos_w.T.reshape(1, 1, -1, 1, self.proj_grid_w)
-            s_w = self.sin_w.T.reshape(1, 1, -1, 1, self.proj_grid_w)
-            img_w = (img_w * c_w) + (rotate_half(img_w) * s_w)
-            
-            projected_features = torch.cat([img_h, img_w], dim=2)
-            projected_features = projected_features.view(batch_size, S, self.encoding_size, -1)
-        
         # Flatten all image tokens: (B, S * num_spatial_tokens, encoding_size)
         image_tokens = projected_features.permute(0, 1, 3, 2)  # (B, S, num_spatial_tokens, encoding_size)
         image_tokens = image_tokens.reshape(batch_size, S * num_spatial_tokens, self.encoding_size)
@@ -342,10 +325,10 @@ class ViNTWithDepthAnything(BaseModel):
             
             # Extract readout token outputs
             if self.separate_tokens_and_heads:
-                dist_repr = self.dist_output_layers(readout_out[:, 0, :])   # First readout token
-                action_repr = self.action_output_layers(readout_out[:, 1, :])  # Second readout token
+                dist_repr = self.dist_output_layers(readout_out[:, -2, :])   # First readout token
+                action_repr = self.action_output_layers(readout_out[:, -1, :])  # Second readout token
             else:
-                final_repr = self.output_layers(readout_out[:, 0, :])  # Only readout token
+                final_repr = self.output_layers(readout_out[:, -1, :])  # Only readout token
         else:
             # Use TransformerEncoder: concatenate all tokens
             all_tokens = torch.cat([image_tokens, readout_tokens], dim=1)  # (B, seq_len, encoding_size)

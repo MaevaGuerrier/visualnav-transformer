@@ -264,7 +264,7 @@ class ViNTWithDINOTokens(BaseModel):
             non_image_tokens = self.token_embedding(torch.zeros(batch_size, dtype=torch.long, device=device))[:, None, :]  # [B, 1, C]
 
         if action_avail:
-            non_image_tokens = torch.cat([non_image_tokens, action_history_emb], dim=1)  # [B, num_readout_tokens + context_size - 1, C]
+            non_image_tokens = torch.cat([action_history_emb, non_image_tokens], dim=1)  # [B, num_readout_tokens + context_size - 1, C]
 
         
         
@@ -282,10 +282,10 @@ class ViNTWithDINOTokens(BaseModel):
             )
             
             if self.separate_tokens_and_heads:
-                dist_repr = self.dist_output_layers(readout_out[:, 0, :])   # First readout token
+                dist_repr = self.dist_output_layers(readout_out[:, -2, :])   # First readout token
                 action_repr = self.action_output_layers(readout_out[:, 1, :])  # Second readout token
             else:
-                final_repr = self.output_layers(readout_out[:, 0, :])
+                final_repr = self.output_layers(readout_out[:, -1, :])
         else:
             # Use TransformerEncoder: concatenate all tokens
             tokens = torch.cat([image_tokens_flat, non_image_tokens], dim=1)
