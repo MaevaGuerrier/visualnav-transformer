@@ -59,6 +59,7 @@ def pd_controller(waypoint: np.ndarray) -> Tuple[float]:
 		w = np.arctan(dy/dx) / DT
 	v = np.clip(v, 0, MAX_V)
 	w = np.clip(w, -MAX_W, MAX_W)
+	print(f"vel: {v} ang_vel: {w}, radian: {np.arctan(dy/(dx+1e-5))}, degree: {np.arctan(dy/(dx+1e-5)) / np.pi * 180}")
 	return v, w
 
 

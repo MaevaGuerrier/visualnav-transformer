@@ -36,6 +36,26 @@ from topic_names import (
     CLOSEST_NODE_TOPIC,
 )
 
+# MetricNet
+from metricnet.metricnet import MetricNet
+
+def remove_orig_mod_prefix(state_dict: dict) -> dict:
+    cleaned_state_dict = {}
+    
+    for key, value in state_dict.items():
+        new_key = key.replace("_orig_mod.", "")
+        cleaned_state_dict[new_key] = value
+        
+    return cleaned_state_dict
+
+def load_metricnet(weights_path):
+    model = MetricNet()
+    state_dict = torch.load(weights_path)
+    state_dict = remove_orig_mod_prefix(state_dict)
+    model.load_state_dict(state_dict, strict=True)
+    model.to(device)
+    return model
+
 
 # CONSTANTS
 TOPOMAP_IMAGES_DIR = "../topomaps/images"
@@ -132,7 +152,10 @@ def main(args: argparse.Namespace):
     ort_sess_dist_pred = load_model_onnx("nomad_dist_pred_net")
     print("loaded distance predictor onnx model")
     ort_sess_noise_pred = load_model_onnx("nomad_noise_pred_net")
-    # print("loaded noise predictor onnx model")
+
+    #metricnet = load_metricnet("../model_weights/metricnet.pth")
+    metricnet = load_model_onnx("metricnet")
+    print("loaded metricnet onnx model")
     # load topomap
     topomap_filenames = sorted(
         os.listdir(os.path.join(TOPOMAP_IMAGES_DIR, args.dir)),
@@ -199,6 +222,10 @@ def main(args: argparse.Namespace):
                 transf_obs_img = transform_images(
                     context_queue, model_params["image_size"], center_crop=crop
                 )
+                # Prepare most recent obs image for metricnet (with different size)
+                metricnet_obs_img = transform_images(
+                    context_queue[-1:], [224, 224], center_crop=crop
+                )
 
                 # Vectorized goal processing
                 goal_imgs = topomap[start:end + 1]  
@@ -209,7 +236,12 @@ def main(args: argparse.Namespace):
 
                 # Repeat observation for batch
                 num_goals = len(goal_imgs)
+                print(f"num_goals: {num_goals}")
                 batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float16')
+                # batch size should be args.num_samples because this is for after sg selection
+                batch_metricnet_obs_imgs = np.tile(
+                    metricnet_obs_img, (args.num_samples, 1, 1, 1)
+                ).astype('float16')
                 input_goal_mask_np = np.zeros((num_goals,), dtype=np.int64)
                 # print(f"type batch_obs_imgs_np {batch_obs_imgs_np.dtype}, batch_goal_data_np {batch_goal_data_np.dtype}")
                 # print(f"len batch_obs_imgs_np {len(batch_obs_imgs_np)}, len batch_goal_data_np {len(batch_goal_data_np)}")
@@ -264,7 +296,9 @@ def main(args: argparse.Namespace):
                 closest_node_msg.data = closest_node
                 closest_node_pub.publish(closest_node_msg)
                 
+                print(obsgoal_cond.shape)
                 sg_idx = min(min_dist_idx + int(distances[min_dist_idx] < args.close_threshold), len(obsgoal_cond) - 1)
+                print(sg_idx)
                 obs_cond_np = obsgoal_cond[sg_idx]
         
                 # infer action
@@ -319,27 +353,44 @@ def main(args: argparse.Namespace):
                         naction_np = naction_torch.detach().cpu().numpy()
                         # print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
 
+                    # metricnet prediction
+                    # LayerNorm is not implemented for float16
+                    # get latest observation for metricnet
+                    obs = batch_metricnet_obs_imgs[:, -3:, :, :].astype(np.float32)
+                    unscaled_waypoints_np = get_action(naction_torch).cpu().numpy()
+                    wpts = unscaled_waypoints_np
+                    inputs = {
+                        "obs_img": obs.astype(np.float32),
+                        "waypoint": wpts.astype(np.float32),
+                    }
+                    onnx_out = metricnet.run(["scale_output"], inputs)[0]
+                    scale = onnx_out / 1000
+                    #scale = metricnet(
+                    #    obs,
+                    #    wpts
+                    #) / 1000
+                    scaled_waypoints_np = unscaled_waypoints_np * scale[:, None, None]
+
                     inference_time = time.time() - start_time
                     print(f"Inference time: {inference_time:.3f} seconds")
                     inference_time_msg = Float32()
                     inference_time_msg.data = inference_time
                     inference_pub.publish(inference_time_msg)
 
-                naction_np = to_numpy(get_action(naction_torch))
                 sampled_actions_msg = Float32MultiArray()
-                sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
+                sampled_actions_msg.data = np.concatenate((np.array([0]), unscaled_waypoints_np.flatten()))
                 
                 sampled_actions_pub.publish(sampled_actions_msg)
-                naction_np = naction_np[0]
-                chosen_waypoint = naction_np[args.waypoint]
+                # first sampled action
+                scaled_waypoints_np = scaled_waypoints_np[0]
+                chosen_waypoint = scaled_waypoints_np[args.waypoint]
 
 # ------------------
 
         # RECOVERY MODE
-        if model_params["normalize"]:
-            chosen_waypoint[:2] *= MAX_V / RATE
         waypoint_msg = Float32MultiArray()
         waypoint_msg.data = chosen_waypoint
+        print(f"chosen_waypoint: {chosen_waypoint}")
         waypoint_pub.publish(waypoint_msg)
 
         reached_goal = closest_node == goal_node

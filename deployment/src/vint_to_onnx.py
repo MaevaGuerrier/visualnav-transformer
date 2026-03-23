@@ -11,7 +11,7 @@ MODEL_WEIGHTS_PATH = "../model_weights"
 ROBOT_CONFIG_PATH = "../config/robot.yaml"
 MODEL_CONFIG_PATH = "../config/models.yaml"
 
-model_name = "vint"
+model_name = "vint_finetuned"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
@@ -56,7 +56,7 @@ dummy_goal = torch.randn(4, 3, 64, 85, device=device)
 dummy_obs = torch.randn(4, 18, 64, 85, device=device)
 
 
-output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/vint.onnx"
+output_path = "/workspace/src/visualnav-transformer/deployment/model_weights/vint_finetuned.onnx"
 
 print("Testing forward pass for vint ...")
 with torch.no_grad():

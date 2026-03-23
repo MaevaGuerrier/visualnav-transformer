@@ -15,6 +15,7 @@ from utils_onnx import msg_to_pil, transform_images, load_model_onnx
 
 # from vint_train.training.train_utils import get_action
 # import torch
+import cv2
 from PIL import Image as PILImage
 import numpy as np
 import argparse
@@ -113,139 +114,182 @@ def main(args: argparse.Namespace):
         # print("in ros")
         chosen_waypoint = np.zeros(4)
         if len(context_queue) > model_params["context_size"]:
-                # print("init")
-                start = max(closest_node - args.radius, 0)
-                end = min(closest_node + args.radius + 1, goal_node)
-                distances = []
-                waypoints = []
-                batch_obs_imgs = []
-                batch_goal_data = []
-                # batch_obs_imgs_np = []
-                # batch_goal_data_np = []
+            # print("init")
+            start = max(closest_node - args.radius, 0)
+            end = min(closest_node + args.radius + 1, goal_node)
+            distances = []
+            waypoints = []
+            batch_obs_imgs = []
+            batch_goal_data = []
+            # batch_obs_imgs_np = []
+            # batch_goal_data_np = []
 
-                crop = True
-                
-                start_time = time.time()
-                # Transform observation once
-                transf_obs_img = transform_images(
-                    context_queue, model_params["image_size"], center_crop=crop
-                )
+            crop = True
+            
+            start_time = time.time()
+            # FOR VISUALIZATION
+            current_img_pil = context_queue[-1]
+            # Transform observation once
+            transf_obs_img = transform_images(
+                context_queue, model_params["image_size"], center_crop=crop
+            )
 
-                # Vectorized goal processing
-                goal_imgs = topomap[start:end + 1]  
-                batch_goal_data_np = np.concatenate([
-                    transform_images(sg_img, model_params["image_size"], center_crop=crop)
-                    for sg_img in goal_imgs
-                ], axis=0).astype('float32')
+            # Vectorized goal processing
+            goal_imgs = topomap[start:end + 1]  
+            batch_goal_data_np = np.concatenate([
+                transform_images(sg_img, model_params["image_size"], center_crop=crop)
+                for sg_img in goal_imgs
+            ], axis=0).astype('float32')
 
-                # Repeat observation for batch
-                num_goals = len(goal_imgs)
-                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
-                
+            # Repeat observation for batch
+            num_goals = len(goal_imgs)
+            batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
+            
 
-                # print("batch_obs_imgs shape:", batch_obs_imgs)
-                # print("batch_goal_data shape:", batch_goal_data)
-                # import pdb; pdb.set_trace()
-                # ort_inputs = {
-                #     "obs_img": batch_obs_imgs_np,
-                #     "goal_img": batch_goal_data_np,
-                # }
+            # print("batch_obs_imgs shape:", batch_obs_imgs)
+            # print("batch_goal_data shape:", batch_goal_data)
+            # import pdb; pdb.set_trace()
+            # ort_inputs = {
+            #     "obs_img": batch_obs_imgs_np,
+            #     "goal_img": batch_goal_data_np,
+            # }
 
-                # ort_outputs = ort_session.run(None, ort_inputs)
-                # print(f"Inference time without torch {time.time() - start_time}")
-                
-                
-                # distances, waypoints = ort_outputs[0], ort_outputs[1]
+            # ort_outputs = ort_session.run(None, ort_inputs)
+            # print(f"Inference time without torch {time.time() - start_time}")
+            
+            
+            # distances, waypoints = ort_outputs[0], ort_outputs[1]
 
 
-                distances, waypoints = vint_onnx.run(None, {
-                    "obs_img": batch_obs_imgs_np,
-                    "goal_img": batch_goal_data_np,
-                })
-                inference_time = time.time() - start_time
-                print(f"Inference time: {inference_time:.3f} seconds")
-                inference_time_msg = Float32()
-                inference_time_msg.data = inference_time
-                inference_pub.publish(inference_time_msg)
+            distances, waypoints = vint_onnx.run(None, {
+                "obs_img": batch_obs_imgs_np,
+                "goal_img": batch_goal_data_np,
+            })
+            inference_time = time.time() - start_time
+            print(f"Inference time: {inference_time:.3f} seconds")
+            inference_time_msg = Float32()
+            inference_time_msg.data = inference_time
+            inference_pub.publish(inference_time_msg)
 
-                distances_msg = Float32MultiArray()
-                distances_msg.data = distances.flatten()
-                distances_pub.publish(distances_msg)
-                
-                
-                # print("distances shape:", distances.shape, "len:", distances)
-                # print("waypoints shape:", waypoints.shape, "len:", waypoints)
+            distances_msg = Float32MultiArray()
+            distances_msg.data = distances.flatten()
+            distances_pub.publish(distances_msg)
+            
+            
+            # print("distances shape:", distances.shape, "len:", distances)
+            # print("waypoints shape:", waypoints.shape, "len:", waypoints)
 
-                # look for closest node
-                min_dist_idx = np.argmin(distances)
-                # chose subgoal and output waypoints
+            # look for closest node
+            min_dist_idx = np.argmin(distances)
+            # chose subgoal and output waypoints
+            # print(
+            #     "min dist idx:",
+            #     min_dist_idx,
+            #     "min dist:",
+            #     distances[min_dist_idx],
+            #     "close_threshold:",
+            #     args.close_threshold,
+            # )
+            # FOR VISUALIZATION
+            goal_img_pil = goal_imgs[min_dist_idx]
+            if distances[min_dist_idx] > args.close_threshold:
                 # print(
-                #     "min dist idx:",
+                #     "Not close enough to the next node, choosing closest waypoint",
+                #     waypoints[min_dist_idx][args.waypoint],
+                #     "at index",
                 #     min_dist_idx,
-                #     "min dist:",
-                #     distances[min_dist_idx],
-                #     "close_threshold:",
-                #     args.close_threshold,
                 # )
-                if distances[min_dist_idx] > args.close_threshold:
-                    # print(
-                    #     "Not close enough to the next node, choosing closest waypoint",
-                    #     waypoints[min_dist_idx][args.waypoint],
-                    #     "at index",
-                    #     min_dist_idx,
-                    # )
-                    chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
-                    closest_node = start + min_dist_idx
-                else:
-                    # print(
-                    #     "Very far already a lost cause ",
-                    #     min(min_dist_idx + 1, len(waypoints) - 1),
-                    # )
-                    chosen_waypoint = waypoints[
-                        min(min_dist_idx + 1, len(waypoints) - 1)
-                    ][args.waypoint]
-                    # print(
-                    #     "closest start",
-                    #     start,
-                    #     "min_dist_idx + 1",
-                    #     min_dist_idx + 1,
-                    #     "goal_node",
-                    #     goal_node,
-                    # )
-                    closest_node = min(start + min_dist_idx + 1, goal_node)
-                # print("chosen wp", chosen_waypoint)
-                # print("min dist idx", min_dist_idx)
+                chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
+                closest_node = start + min_dist_idx
+            else:
+                # print(
+                #     "Very far already a lost cause ",
+                #     min(min_dist_idx + 1, len(waypoints) - 1),
+                # )
+                chosen_waypoint = waypoints[
+                    min(min_dist_idx + 1, len(waypoints) - 1)
+                ][args.waypoint]
+                # print(
+                #     "closest start",
+                #     start,
+                #     "min_dist_idx + 1",
+                #     min_dist_idx + 1,
+                #     "goal_node",
+                #     goal_node,
+                # )
+                closest_node = min(start + min_dist_idx + 1, goal_node)
+            # print("chosen wp", chosen_waypoint)
+            # print("min dist idx", min_dist_idx)
 
-                print("closest node:", closest_node)
-                closest_node_msg = Int32()
-                closest_node_msg.data = closest_node
-                closest_node_pub.publish(closest_node_msg)
+            print("closest node:", closest_node)
+            closest_node_msg = Int32()
+            closest_node_msg.data = closest_node
+            closest_node_pub.publish(closest_node_msg)
 
-                # Publish visualization messages
-                # Waypoint
-                waypoint_msg_viz = PoseStamped()
-                waypoint_msg_viz.header.frame_id = "odom"
-                waypoint_msg_viz.header.stamp = rospy.Time.now()
-                wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
-                # print("waypoint point:", wp_point)
-                wp_position = Pose(position=wp_point)
-                # print("waypoint position:", wp_position)
-                waypoint_msg_viz.pose = wp_position
-                waypoint_viz_pub.publish(waypoint_msg_viz)
+            # Publish visualization messages
+            # Waypoint
+            waypoint_msg_viz = PoseStamped()
+            waypoint_msg_viz.header.frame_id = "odom"
+            waypoint_msg_viz.header.stamp = rospy.Time.now()
+            wp_point = Point(x=chosen_waypoint[0], y=chosen_waypoint[1])
+            # print("waypoint point:", wp_point)
+            wp_position = Pose(position=wp_point)
+            # print("waypoint position:", wp_position)
+            waypoint_msg_viz.pose = wp_position
+            waypoint_viz_pub.publish(waypoint_msg_viz)
 
-                # Path
-                path_msg_viz = Path()
-                path_msg_viz.header.frame_id = "base_link"
-                path_msg_viz.header.stamp = rospy.Time.now()
-                # print("------")
-                for wp in waypoints[min_dist_idx]:
-                    # print("waypoint:", wp)
-                    path_msg_viz.poses.append(
-                        PoseStamped(pose=Pose(position=Point(x=wp[0], y=wp[1])))
+            # Path
+            path_msg_viz = Path()
+            path_msg_viz.header.frame_id = "base_link"
+            path_msg_viz.header.stamp = rospy.Time.now()
+            # print("------")
+            for wp in waypoints[min_dist_idx]:
+                # print("waypoint:", wp)
+                path_msg_viz.poses.append(
+                    PoseStamped(pose=Pose(position=Point(x=wp[0], y=wp[1])))
+                )
+            path_viz_pub.publish(path_msg_viz)
+            # for dist in distances:
+            # print("distance:", dist)
+        
+            # --- VISUALIZATION BLOCK START ---
+            try:
+                # 1. Get current observation image and convert to OpenCV format
+                current_img_cv = cv2.cvtColor(np.array(current_img_pil), cv2.COLOR_RGB2BGR)
+                goal_img_cv = cv2.cvtColor(np.array(goal_img_pil), cv2.COLOR_RGB2BGR)
+
+                print(current_img_cv.shape, goal_img_cv.shape)
+
+                # Resize if needed to ensure consistent height
+                h, w = current_img_cv.shape[:2]
+
+                # 2. Create a Bird's Eye View (BEV) canvas for trajectories
+                bev_canvas = np.ones((h, h, 3), dtype=np.uint8) * 255
+                center_x = h // 2
+                center_y = h - 20 # Place robot near the bottom
+                vis_scale = 50 # Scale factor (pixels per meter)
+
+                # Draw sampled trajectories (Blue)s
+                pt1 = np.array([0, 0])
+                vis_traj = waypoints[min_dist_idx]
+                vis_traj[:2] *= MAX_V / RATE
+                print(vis_traj)
+                for wp in vis_traj:
+                    pt2 = wp
+                    cv2.line(
+                        bev_canvas, 
+                        (int(center_x + pt1[1] * vis_scale), int(center_y - pt1[0] * vis_scale)), 
+                        (int(center_x + pt2[1] * vis_scale), int(center_y - pt2[0] * vis_scale)), 
+                        (255, 0, 0), 1
                     )
-                path_viz_pub.publish(path_msg_viz)
-                # for dist in distances:
-                # print("distance:", dist)
+                    pt1 = pt2
+
+                # 3. Concatenate and publish
+                viz_combined = cv2.hconcat([current_img_cv, goal_img_cv, bev_canvas])
+                cv2.imwrite(f"visualizations/model_preds/{start_time}.jpg", viz_combined)
+            except Exception as e:
+                print(f"Visualization error: {e}")
+            # --- VISUALIZATION BLOCK END ---
 
         # RECOVERY MODE
         if model_params["normalize"]:
