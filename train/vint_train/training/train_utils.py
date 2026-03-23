@@ -1299,6 +1299,7 @@ def normalize_data(data, stats):
 
 def unnormalize_data(ndata, stats):
     ndata = (ndata + 1) / 2
+    print(stats['max'], stats['min'])
     data = ndata * (stats['max'] - stats['min']) + stats['min']
     return data
 

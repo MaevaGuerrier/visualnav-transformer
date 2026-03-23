@@ -2,6 +2,12 @@ vint:
   config_path: "../../train/config/vint.yaml"
   ckpt_path: "../model_weights/vint.pth"
 
+
+vint_finetuned: 
+  config_path: "../../train/config/vint.yaml"
+  ckpt_path: "../model_weights/vint_finetuned.pth"
+
+
 late_fusion: 
   config_path: "../../train/config/late_fusion.yaml"
   ckpt_path: "../model_weights/vint_late_fusion.pth"
