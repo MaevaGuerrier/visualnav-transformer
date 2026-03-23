@@ -107,13 +107,13 @@ class TopicRateMonitor:
                     status.level = DiagnosticStatus.ERROR
                     status.message = f"{topic_name} Rate too low! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
                     rospy.logwarn(status.message)
-                elif current_rate > max_rate:
-                    status.level = DiagnosticStatus.WARN
-                    status.message = f"{topic_name} Rate too high! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
-                    # rospy.logwarn(status.message)
-                else:
-                    status.level = DiagnosticStatus.OK
-                    status.message = f"Rate OK: {current_rate:.2f} Hz"
+                # elif current_rate > max_rate:
+                #     status.level = DiagnosticStatus.WARN
+                #     status.message = f"{topic_name} Rate too high! {current_rate:.2f} Hz (expected {expected_rate:.2f} Hz)"
+                #     rospy.logwarn(status.message)
+                # else:
+                #     status.level = DiagnosticStatus.OK
+                #     status.message = f"Rate OK: {current_rate:.2f} Hz"
 
                 
                 status.values.append(KeyValue(key="Expected Rate (Hz)", value=str(expected_rate)))

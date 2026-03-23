@@ -11,17 +11,13 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
-from utils_onnx import msg_to_pil, transform_images, load_model_trt, load_model_onnx
+from src.utils_onnx import msg_to_pil, transform_images, load_model_trt, load_model_onnx
 
 
 # To DELETE AS WE CHECK THAT EACH TRT MODULE WORKS CORRECTLY -----------------------------
-from utils import load_model, to_numpy
+from src.utils import to_numpy
 from vint_train.training.train_utils import get_action
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-
-
-from ddpms_scheduler_np import DDPMSchedulerNumPy
-
 # --------------------------------------------------------------------------------
 
 # from vint_train.training.train_utils import get_action
@@ -31,64 +27,22 @@ import numpy as np
 import argparse
 import yaml
 import time
+import torch
 
 # UTILS
-from topic_names import (
+from src.topic_names import (
     IMAGE_TOPIC,
     WAYPOINT_TOPIC,
     SAMPLED_ACTIONS_TOPIC,
     CLOSEST_NODE_TOPIC,
 )
 
-
 # CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-ROBOT_CONFIG_PATH = "../config/robot.yaml"
-with open(ROBOT_CONFIG_PATH, "r") as f:
-    robot_config = yaml.safe_load(f)
-MAX_V = robot_config["max_v"]
-MAX_W = robot_config["max_w"]
-RATE = robot_config["frame_rate"]
-VEL_TOPIC = robot_config["vel_navi_topic"]
-
-model_params = {"normalize": True, "context_size": 5, "image_size": [85, 64]}
-
-# GLOBALS
-context_queue = []
-context_size = model_params["context_size"]
-subgoal = []
-
-# Load the model
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# print("Using device:", device)
-
-
-def callback_obs(msg):
-    obs_img = msg_to_pil(msg)
-    if context_size is not None:
-        if len(context_queue) < context_size + 1:
-            context_queue.append(obs_img)
-        else:
-            context_queue.pop(0)
-            context_queue.append(obs_img)
-
-
-
-# TO TAKE OUT AS WE CHECK THAT EACH TRT MODULE WORKS CORRECTLY ------------------------------------------------
-
-import torch
-
-from topic_names import (IMAGE_TOPIC,
-                        WAYPOINT_TOPIC,
-                        SAMPLED_ACTIONS_TOPIC,
-                        CLOSEST_NODE_TOPIC)
-
-
-# CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-MODEL_WEIGHTS_PATH = "../model_weights"
-ROBOT_CONFIG_PATH ="../config/robot.yaml"
-MODEL_CONFIG_PATH = "../config/models.yaml"
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+TOPOMAP_IMAGES_DIR = f"{WORK_DIR}topomaps/images"
+MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
+ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
+MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]
@@ -101,19 +55,26 @@ VEL_TOPIC = robot_config["vel_navi_topic"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
+# GLOBALS
+context_queue = []
+context_size = None
+subgoal = []
 
-# -------------------------------------------------------------------------------------------------------------
+def callback_obs(msg):
+    obs_img = msg_to_pil(msg)
+    if context_size is not None:
+        if len(context_queue) < context_size + 1:
+            context_queue.append(obs_img)
+        else:
+            context_queue.pop(0)
+            context_queue.append(obs_img)
+
 
 
 def main(args: argparse.Namespace):
     global context_size
 
-    # TO TAKE OUT AS WE CHECK THAT EACH TRT MODULE WORKS CORRECTLY ------------------------------------------------
-
-    with open(MODEL_CONFIG_PATH, "r") as f:
-        model_paths = yaml.safe_load(f)
-
-    model_config_path = model_paths["nomad"]["config_path"]
+    model_config_path = f"{MODEL_CONFIG_PATH}nomad.yaml"
     with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
@@ -126,15 +87,12 @@ def main(args: argparse.Namespace):
         beta_schedule='squaredcos_cap_v2',
         clip_sample=True,
         prediction_type='epsilon'
-    )   
+    )
 
-    # -------------------------------------------------------------------------------------------------------------
-
-    # trt_vision_encoder = load_model_trt("nomad_vision_encoder.trt")
-    trt_vis_encoder = load_model_trt("nomad_vision_encoder.trt")
-    print("loaded vision encoder trt model")
-    trt_dist_pred = load_model_trt("nomad_dist_pred_net.trt")
-    print("loaded distance predictor trt model")
+    ort_sess_vis_encoder = load_model_onnx("nomad_vision_encoder")
+    print("loaded vision encoder onnx model")
+    ort_sess_dist_pred = load_model_onnx("nomad_dist_pred_net")
+    print("loaded distance predictor onnx model")
     ort_sess_noise_pred = load_model_onnx("nomad_noise_pred_net")
     print("loaded noise predictor onnx model")
     # load topomap
@@ -209,11 +167,11 @@ def main(args: argparse.Namespace):
                 batch_goal_data_np = np.concatenate([
                     transform_images(sg_img, model_params["image_size"], center_crop=crop)
                     for sg_img in goal_imgs
-                ], axis=0).astype('float32')
+                ], axis=0).astype('float16')
 
                 # Repeat observation for batch
                 num_goals = len(goal_imgs)
-                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
+                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float16')
                 input_goal_mask_np = np.zeros((num_goals,), dtype=np.int64)
                 # print(f"type batch_obs_imgs_np {batch_obs_imgs_np.dtype}, batch_goal_data_np {batch_goal_data_np.dtype}")
                 # print(f"len batch_obs_imgs_np {len(batch_obs_imgs_np)}, len batch_goal_data_np {len(batch_goal_data_np)}")
@@ -234,20 +192,30 @@ def main(args: argparse.Namespace):
                 # obs image shape: torch.Size([4, 12, 96, 96]), 
                 # mask shape: torch.Size([4])
                 
-                # print(f"Shape batch_obs_imgs_np {batch_obs_imgs_np.shape} goal {batch_goal_data_np.shape} mask {input_goal_mask_np.shape}")
-                obsgoal_cond = trt_vis_encoder.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np, input_goal_mask=input_goal_mask_np)
-                # print(f"obscond {obsgoal_cond}")
-                obsgoal_cond = obsgoal_cond[0]
-                # print(f"obscond after {obsgoal_cond}")
-                distances = trt_dist_pred.infer(obsgoal_cond=obsgoal_cond)
-                # print("distances before:", distances)
-                distances = distances[0]
-                distances_msg = Float32MultiArray()
-                distances_msg.data = distances
-                distances_pub.publish(distances_msg)
-                # print("distances after:", distances)
-                min_dist_idx = np.argmin(distances)
+                # obsgoal_cond = trt_vision_encoder.infer(obs_img=batch_obs_imgs_np, goal_img=batch_goal_data_np, input_goal_mask=input_goal_mask_np)
                 
+                ort_inputs = {
+                    "obs_img": batch_obs_imgs_np.astype(np.float32),
+                    "goal_img": batch_goal_data_np.astype(np.float32),
+                    "input_goal_mask": input_goal_mask_np.astype(np.int64),
+                }
+                obsgoal_cond = ort_sess_vis_encoder.run(None, ort_inputs)[0]
+                
+                # print(f"Vision encoder Inference time without torch {time.time() - start_time}")
+                # print(obsgoal_cond)
+                
+                # distances = model("dist_pred_net", obsgoal_cond=torch_obsgoal_cond)
+                ort_inputs = {
+                    "obsgoal_cond": obsgoal_cond,
+                }
+                time_1 = time.time()
+                distances =  ort_sess_dist_pred.run(None, ort_inputs)[0]
+                distances_msg = Float32MultiArray()
+                distances_msg.data = distances.flatten()
+                distances_pub.publish(distances_msg)
+                # print(f"Distance prediction Inference time without torch {time.time() - time_1}")
+                # print("distances:", distances, distances.shape)
+                min_dist_idx = np.argmin(distances)
                 
                
 # -----------------
@@ -282,7 +250,9 @@ def main(args: argparse.Namespace):
                     # init scheduler
                     noise_scheduler.set_timesteps(num_diffusion_iters)
 
-        
+                    start_time = time.time()
+                    # print(f"TIMESTEPS: {noise_scheduler.timesteps}")   
+                    
                     for k in noise_scheduler.timesteps[:]:
                         # predict noise
                         k_np = np.array(k.cpu().item(), dtype=np.int64)
@@ -309,23 +279,20 @@ def main(args: argparse.Namespace):
                         ).prev_sample
                         # print(f"After noise scheduler")
                         naction_np = naction_torch.detach().cpu().numpy()
-                        # print(f"naction after noise scheduler {naction_np}")
-
+                        # print(f"naction type: {type(naction_np)}, shape: {naction_np.shape}")
 
                     inference_time = time.time() - start_time
                     print(f"Inference time: {inference_time:.3f} seconds")
                     inference_time_msg = Float32()
                     inference_time_msg.data = inference_time
                     inference_pub.publish(inference_time_msg)
-                    
-                naction_torch = torch.from_numpy(naction_np).float().to(device)
+
                 naction_np = to_numpy(get_action(naction_torch))
-                # naction_np = get_action(naction_np)
                 sampled_actions_msg = Float32MultiArray()
                 sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
-                print("published sampled actions")
+                
                 sampled_actions_pub.publish(sampled_actions_msg)
-                naction_np = naction_np[0] 
+                naction_np = naction_np[0]
                 chosen_waypoint = naction_np[args.waypoint]
 
 # ------------------
@@ -360,7 +327,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="sim_test",
+        default="mist_office",
         type=str,
         help="path to topomap images",
     )

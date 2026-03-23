@@ -13,7 +13,37 @@ MODEL_CONFIG_PATH = "../config/models.yaml"
 
 model_name = "gnm"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+"""
+NOTE: You might encounter issues with laoding gnm for python version 3.10 or higher.
+To solve the issue do not load the model on cuda device.
+ERROR TRACE:
+Loading model from ../model_weights/gnm.pth
+/usr/local/lib/python3.10/dist-packages/torchvision/ops/misc.py:120: UserWarning: Don't use ConvNormActivation directly, please use Conv2dNormActivation and Conv3dNormActivation instead.
+  warnings.warn(
+corrupted size vs. prev_size
+Fatal Python error: Aborted
+
+Current thread 0x0000ffffa3279860 (most recent call first):
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/conv.py", line 134 in __init__
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/conv.py", line 447 in __init__
+  File "/usr/local/lib/python3.10/dist-packages/torchvision/ops/misc.py", line 97 in __init__
+  File "/usr/local/lib/python3.10/dist-packages/torchvision/ops/misc.py", line 159 in __init__
+  File "/usr/local/lib/python3.10/dist-packages/torchvision/models/mobilenetv2.py", line 38 in __init__
+  File "/workspace/.packages_nomad_ros2/vint_train/models/gnm/modified_mobilenetv2.py", line 90 in __init__
+  File "/workspace/.packages_nomad_ros2/vint_train/models/gnm/gnm.py", line 29 in __init__
+  File "/workspace/src/visualnav-transformer/deployment/src/utils.py", line 71 in load_model
+  File "/workspace/src/visualnav-transformer/deployment/src/gnm_to_onnx.py", line 37 in <module>
+
+Extension modules: numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, torch._C, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, yaml._yaml, PIL._imaging, PIL._imagingft, google.protobuf.pyext._message (total: 24)
+Aborted (core dumped)
+"""
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
+
+
+
+
 print("Using device:", device)
 
 with open(MODEL_CONFIG_PATH, "r") as f:
@@ -92,7 +122,20 @@ print("ONNX model of dist enocder is valid!")
 
 
 print("\nTesting dist enocder ONNX Runtime...")
-providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+"""
+NOTE: A similar issue with onnxruntime and python 3.10 or higher might occur.
+To solve the issue, use CPUExecutionProvider only.
+ERROR TRACE:
+Current thread 0x0000ffff80e8b860 (most recent call first):
+  File "/usr/local/lib/python3.10/dist-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 491 in _create_inference_session
+  File "/usr/local/lib/python3.10/dist-packages/onnxruntime/capi/onnxruntime_inference_collection.py", line 419 in __init__
+  File "/workspace/src/visualnav-transformer/deployment/src/gnm_to_onnx.py", line 98 in <module>
+
+Extension modules: numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, torch._C, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, yaml._yaml, PIL._imaging, PIL._imagingft, google.protobuf.pyext._message (total: 24)
+Aborted (core dumped)
+"""
+# providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+providers = ["CPUExecutionProvider"]
 ort_session = ort.InferenceSession(output_path, providers=providers)
 ort_inputs = {
     "obs_img": dummy_obs.cpu().numpy(),

@@ -7,13 +7,13 @@ import rospy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray, Bool
 
-from topic_names import (WAYPOINT_TOPIC, 
+from src.topic_names import (WAYPOINT_TOPIC, 
 			 			REACHED_GOAL_TOPIC)
 from ros_data import ROSData
-from utils import clip_angle
+from src.utils import clip_angle
 
 # CONSTS
-CONFIG_PATH = "../config/robot.yaml"
+CONFIG_PATH = "../../config/robot.yaml"
 with open(CONFIG_PATH, "r") as f:
 	robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]

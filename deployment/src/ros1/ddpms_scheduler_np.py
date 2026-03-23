@@ -3,7 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from utils_onnx import msg_to_pil, transform_images, load_model_trt, load_model_onnx
+from src.utils_onnx import msg_to_pil, transform_images, load_model_trt, load_model_onnx
 
 
 @dataclass

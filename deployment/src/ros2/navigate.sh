@@ -1,22 +1,8 @@
 #!/bin/bash
-launch_file=`sed -n 's/^LAUNCH_FILE *= *"\(.*\)"/\1/p' topic_names.py`
-launch_pkg=`sed -n 's/^LAUNCH_PKG *= *"\(.*\)"/\1/p' topic_names.py`
-img_topic=`sed -n 's/^IMAGE_TOPIC *= *"\(.*\)"/\1/p' topic_names.py`
 
-# Failsafe to make sure that pip install -e has been executed
-# This is necessary to ensure that the package needed are present
-# eval "$(conda shell.bash hook)"
-# conda activate vint_deployment
-
-# source /opt/ros/noetic/setup.bash
-
-# # Navigate to the directory containing the package
-# cd /workspace/src/visualnav-transformer
-# # Install the package in editable mode
-# pip install -e train/
 
 # Change back the directory to the working dir with the navigate.py script
-cd /workspace/src/visualnav-transformer/deployment/src
+cd /workspace/src/visualnav-transformer/deployment/src/ros2
 
 
 SESSION=navigate_bunker
@@ -44,7 +30,7 @@ tmux send-keys "python3 pd_controller.py" Enter
 
 
 tmux select-pane -t $SESSION:0.2
-tmux send-keys "python3 topic_hz_monitor.py" Enter
+tmux send-keys "python3 topic_hz_monitor.py" Enter 
 
 tmux select-pane -t $SESSION:0.3
 tmux send-keys "python3 monitor.py" Enter

@@ -34,12 +34,15 @@ if os.path.exists(ckpth_path):
 else:
     raise FileNotFoundError(f"Model weights not found at {ckpth_path}")
 
+print("before model load")
 model = load_model(
     ckpth_path,
     model_params,
     device,
 )
+print("after model load")
 model = model.to(device)
+print("model loaded to device")
 
 model.eval()
 

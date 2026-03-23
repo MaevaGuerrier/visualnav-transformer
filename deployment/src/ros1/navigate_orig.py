@@ -15,7 +15,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
-from utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
+from src.utils import msg_to_pil, to_numpy, transform_images, load_model, pil_to_msg
 
 from vint_train.training.train_utils import get_action
 import torch
@@ -26,23 +26,23 @@ import yaml
 import time
 
 # UTILS
-from topic_names import (IMAGE_TOPIC,
+from src.topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
                         SAMPLED_ACTIONS_TOPIC,
                         CLOSEST_NODE_TOPIC)
 
 
 # CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-MODEL_WEIGHTS_PATH = "../model_weights"
-ROBOT_CONFIG_PATH ="../config/robot.yaml"
-MODEL_CONFIG_PATH = "../config/models.yaml"
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+TOPOMAP_IMAGES_DIR = f"{WORK_DIR}topomaps/images"
+MODEL_WEIGHTS_PATH = f"{WORK_DIR}model_weights/"
+ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
+MODEL_CONFIG_PATH = f"{WORK_DIR}../train/config/"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
-VEL_TOPIC = robot_config["vel_navi_topic"]
 
 # GLOBALS
 context_queue = []
@@ -67,20 +67,15 @@ def callback_obs(msg):
 def main(args: argparse.Namespace):
     global context_size
 
-     # load model parameters
-    with open(MODEL_CONFIG_PATH, "r") as f:
-        model_paths = yaml.safe_load(f)
-
-    model_config_path = model_paths[args.model]["config_path"]
+    model_config_path = f"{MODEL_CONFIG_PATH}{args.model}.yaml"
     with open(model_config_path, "r") as f:
         model_params = yaml.safe_load(f)
 
-    
     context_size = model_params["context_size"]
     assert context_size != None
 
     # load model weights
-    ckpth_path = model_paths[args.model]["ckpt_path"]
+    ckpth_path = f"{MODEL_WEIGHTS_PATH}{args.model}.pth"
     if os.path.exists(ckpth_path):
         print(f"Loading model from {ckpth_path}")
     else:
@@ -352,7 +347,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        default="gnm",
         type=str,
         help="model name (only nomad is supported) (hint: check ../config/models.yaml) (default: nomad)",
     )
