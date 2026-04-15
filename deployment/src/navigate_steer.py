@@ -16,14 +16,14 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray
 import torch
 import yaml
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+# from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 from vint_train.training.train_utils import get_action
 
 # UTILS
-from src.utils import msg_to_pil, to_numpy, transform_images, load_model
+from utils import msg_to_pil, to_numpy, transform_images, load_model
 
-from src.topic_names import (IMAGE_TOPIC,
+from topic_names import (IMAGE_TOPIC,
                         WAYPOINT_TOPIC,
                         SAMPLED_ACTIONS_TOPIC)
 
@@ -112,9 +112,9 @@ class NavigationNode(Node):
         # Steering vector injection (optional)
         self.steering_injector = None
         if args.steering_dir:
-            self._install_steering(args.steering_dir, args.alpha)
+            self._install_steering(args=args, steering_dir=args.steering_dir, alpha=args.alpha)
 
-    def _install_steering(self, steering_dir: str, alpha: float):
+    def _install_steering(self, args: argparse.Namespace, steering_dir: str, alpha: float):
         vectors_path = os.path.join(STEERING_VECTORS_DIR, steering_dir)
         layers = self.model.decoder.sa_decoder.layers
         num_layers = len(layers)
@@ -296,79 +296,13 @@ class NavigationNode(Node):
             return
 
         if self.model_params["model_type"] == "nomad":
-            self._timer_cb_nomad()
+            # self._timer_cb_nomad()
+            pass
         else:
             self._timer_cb_other()
 
         if self.closest_node == self.goal_node:
             self.get_logger().info("Reached goal! Stopping...")
-
-    def _timer_cb_nomad(self):
-        """NOMAD 모델을 위한 타이머 콜백 처리"""
-        start = max(self.closest_node - self.args.radius, 0)
-        end = min(self.closest_node + self.args.radius + 1, self.goal_node)
-
-        # Build batch of (obs, goal) tensors
-        obs_images = transform_images(
-            list(self.context_queue),
-            self.model_params["image_size"],
-            center_crop=False,
-        ).to(self.device)
-        obs_images = torch.split(obs_images, 3, dim=1)
-        obs_images = torch.cat(obs_images, dim=1)  # merge context
-
-        batch_goal_imgs = []
-        for g_idx in range(start, end + 1):
-            g_img = transform_images(
-                self.topomap[g_idx], self.model_params["image_size"], center_crop=False
-            )
-            batch_goal_imgs.append(g_img)
-        goal_tensor = torch.cat(batch_goal_imgs, dim=0).to(self.device)
-
-        mask = torch.zeros(1, device=self.device, dtype=torch.long)
-        with torch.no_grad():
-            obsgoal_cond = self.model(
-                "vision_encoder",
-                obs_img=obs_images.repeat(len(goal_tensor), 1, 1, 1),
-                goal_img=goal_tensor,
-                input_goal_mask=mask.repeat(len(goal_tensor)),
-            )
-            dists = self.model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-            dists_np = to_numpy(dists.flatten())
-
-        min_idx = int(np.argmin(dists_np))
-        self.closest_node = start + min_idx
-        sg_idx = min(
-            min_idx + int(dists_np[min_idx] < self.args.close_threshold),
-            len(goal_tensor) - 1,
-        )
-        obs_cond = obsgoal_cond[sg_idx].unsqueeze(0)
-        sg_global_idx = start + sg_idx
-        sg_pil = self.topomap[sg_global_idx]
-        goal_pil = self.topomap[self.goal_node]
-
-        with torch.no_grad():
-            if obs_cond.ndim == 2:
-                obs_cond = obs_cond.repeat(self.args.num_samples, 1)
-            else:
-                obs_cond = obs_cond.repeat(self.args.num_samples, 1, 1)
-
-            len_traj = self.model_params["len_traj_pred"]
-            naction = torch.randn(
-                (self.args.num_samples, len_traj, 2), device=self.device
-            )
-            self.noise_scheduler.set_timesteps(self.model_params["num_diffusion_iters"])
-            for k in self.noise_scheduler.timesteps:
-                noise_pred = self.model(
-                    "noise_pred_net", sample=naction, timestep=k, global_cond=obs_cond
-                )
-                naction = self.noise_scheduler.step(noise_pred, k, naction).prev_sample
-
-        traj_batch = to_numpy(get_action(naction))
-
-        self._publish_msgs(traj_batch)
-        self._publish_viz_image(traj_batch)
-        self._publish_goal_images(sg_pil, goal_pil)
 
     def _timer_cb_other(self):
         start = max(self.closest_node - self.args.radius, 0)
@@ -389,7 +323,8 @@ class NavigationNode(Node):
         batch_goal_data = torch.cat(batch_goal_data, dim=0).to(self.device)
 
         with torch.no_grad():
-            distances, waypoints = self.model(batch_obs_imgs, batch_goal_data)
+            preds = self.model(batch_obs_imgs, batch_goal_data)
+            distances, waypoints = preds[0], preds[1]
             distances_np = to_numpy(distances)
             waypoints_np = to_numpy(waypoints)
         inference_time = time.time() - start_time
@@ -525,9 +460,9 @@ class NavigationNode(Node):
 
 def main():
     parser = argparse.ArgumentParser("Topological navigation (ROS 2)")
-    parser.add_argument("--model", "-m")
+    parser.add_argument("--model", "-m", default="vint")
     parser.add_argument(
-        "--dir", "-d", default="mist_office_new_chair", help="sub‑directory under ../topomaps/images/"
+        "--dir", "-d", default="reference_bunker_loop_mist_reference_trial_1", help="sub‑directory under ../topomaps/images/"
     )
     parser.add_argument(
         "--goal-node", "-g", type=int, default=-1, help="Goal node index (-1 = last)"
@@ -537,11 +472,11 @@ def main():
     parser.add_argument("--radius", "-r", type=int, default=2)
     parser.add_argument("--num-samples", "-n", type=int, default=8)
     parser.add_argument(
-        "--steering-dir", type=str, default=None,
+        "--steering-dir", type=str, default="/workspace/src/visualnav-transformer/deployment/steering_vectors/go_stanford",
         help="Sub-directory under deployment/steering_vectors/ containing vector_L*.pt and h_mean_norms.pt",
     )
     parser.add_argument(
-        "--alpha", type=float, default=0.05,
+        "--alpha", type=float, default=0.025,
         help="Steering injection strength (default: 0.05)",
     )
     parser.add_argument(

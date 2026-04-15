@@ -1,9 +1,3 @@
-
-import os
-import sys
-import io
-import matplotlib.pyplot as plt
-
 # ROS
 from sensor_msgs.msg import Image
 
@@ -15,7 +9,7 @@ import torchvision.transforms.functional as TF
 
 import numpy as np
 from PIL import Image as PILImage
-from typing import List, Tuple, Dict, Optional
+from typing import List
 
 # models
 from vint_train.models.gnm.gnm import GNM
@@ -24,9 +18,45 @@ from vint_train.models.vint.vint import ViNT
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
-from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from vint_train.data.data_utils import IMAGE_ASPECT_RATIO
 
+
+def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
+    """Convert PIL image or numpy array to numpy array with proper formatting for Crossformer."""
+
+    if isinstance(image_input, PILImage.Image):
+
+        if image_input.size != target_size:
+            print(f"Resizing image from {image_input.size} to {target_size} PIL")
+            image_input = image_input.resize(target_size)
+        img_array = np.array(image_input)
+    elif isinstance(image_input, np.ndarray):
+        print(f"Resizing image from {image_input.size} to {target_size} NDARRAY")
+
+        img_array = image_input.copy()
+
+        if img_array.shape[:2] != target_size:
+            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+            elif len(img_array.shape) == 2:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8), mode='L')
+            else:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+
+            pil_temp = pil_temp.resize(target_size)
+            img_array = np.array(pil_temp)
+    else:
+        raise ValueError(f"Unsupported input type: {type(image_input)}")
+
+    if len(img_array.shape) == 2:
+        img_array = np.stack([img_array] * 3, axis=-1)
+    elif img_array.shape[-1] == 4:
+        img_array = img_array[:, :, :3]
+
+    if img_array.dtype != np.uint8:
+        img_array = img_array.astype(np.uint8)
+
+    return img_array
 
 def load_model(
     model_path: str,
@@ -55,42 +85,6 @@ def load_model(
             mha_num_attention_heads=config["mha_num_attention_heads"],
             mha_num_attention_layers=config["mha_num_attention_layers"],
             mha_ff_dim_factor=config["mha_ff_dim_factor"],
-        )
-    elif config["model_type"] == "nomad":
-        if config["vision_encoder"] == "nomad_vint":
-            vision_encoder = NoMaD_ViNT(
-                obs_encoding_size=config["encoding_size"],
-                context_size=config["context_size"],
-                mha_num_attention_heads=config["mha_num_attention_heads"],
-                mha_num_attention_layers=config["mha_num_attention_layers"],
-                mha_ff_dim_factor=config["mha_ff_dim_factor"],
-            )
-            vision_encoder = replace_bn_with_gn(vision_encoder)
-        elif config["vision_encoder"] == "vit": 
-            vision_encoder = ViT(
-                obs_encoding_size=config["encoding_size"],
-                context_size=config["context_size"],
-                image_size=config["image_size"],
-                patch_size=config["patch_size"],
-                mha_num_attention_heads=config["mha_num_attention_heads"],
-                mha_num_attention_layers=config["mha_num_attention_layers"],
-            )
-            vision_encoder = replace_bn_with_gn(vision_encoder)
-        else: 
-            raise ValueError(f"Vision encoder {config['vision_encoder']} not supported")
-        
-        noise_pred_net = ConditionalUnet1D(
-                input_dim=2,
-                global_cond_dim=config["encoding_size"],
-                down_dims=config["down_dims"],
-                cond_predict_scale=config["cond_predict_scale"],
-            )
-        dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
-        
-        model = NoMaD(
-            vision_encoder=vision_encoder,
-            noise_pred_net=noise_pred_net,
-            dist_pred_net=dist_pred_network,
         )
     else:
         raise ValueError(f"Invalid model type: {model_type}")
@@ -131,7 +125,7 @@ def to_numpy(tensor):
     return tensor.cpu().detach().numpy()
 
 
-def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], center_crop: bool = False) -> torch.Tensor:
+def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], center_crop: bool = False, return_img : bool = False) -> torch.Tensor:
     """Transforms a list of PIL image to a torch tensor."""
     transform_type = transforms.Compose(
         [
@@ -151,6 +145,8 @@ def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], cent
             else:
                 pil_img = TF.center_crop(pil_img, (int(w / IMAGE_ASPECT_RATIO), w))
         pil_img = pil_img.resize(image_size) 
+        if return_img: # Added for debug purpose on rviz
+            return pil_img
         transf_img = transform_type(pil_img)
         transf_img = torch.unsqueeze(transf_img, 0)
         transf_imgs.append(transf_img)

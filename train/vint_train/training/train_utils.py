@@ -13,11 +13,11 @@ from vint_train.visualizing.distance_utils import visualize_dist_pred
 from vint_train.visualizing.visualize_utils import to_numpy, from_numpy
 from vint_train.training.logger import Logger
 from vint_train.data.data_utils import VISUALIZATION_IMAGE_SIZE
-try:
-    from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-    from diffusers.training_utils import EMAModel
-except ImportError:
-    pass
+# try:
+#     from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+#     from diffusers.training_utils import EMAModel
+# except ImportError:
+#     pass
 
 import torch
 import torch.nn as nn

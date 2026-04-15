@@ -27,7 +27,7 @@ from std_msgs.msg import Float32MultiArray, Bool
 
 
 
-from src.topic_names import (WAYPOINT_TOPIC, 
+from topic_names import (WAYPOINT_TOPIC, 
 			 			REACHED_GOAL_TOPIC)
 
 WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER

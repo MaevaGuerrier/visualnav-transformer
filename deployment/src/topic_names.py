@@ -1,9 +1,25 @@
 # topic names for ROS communication
+# IMPORTANT THIS FILE HAS TO BE IN THE SAME FOLDER AS SHELL SCRIPTS (record_bag.sh, explore.sh, navigate.sh)
+
+# Launch file related information for your robot 
+
+# SIMULATION ONLY 
+# LAUNCH_FILE="turtle_bot.launch" 
+# LAUNCH_PKG = "limo_gazebo_sim"
+
+# REAL ROBOT 
+LAUNCH_FILE = "bunker_GNM.launch"
+LAUNCH_PKG = "rover_launch/launch/SafeGNM"  
+
+
+TELEOP_PKG = "teleop_twist_keyboard"
+TELEOP_LAUNCH = "teleop_twist_keyboard.py"
 
 # image obs topics
-FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw"
+FRONT_IMAGE_TOPIC = "/usb_cam_front/image_raw" 
 REVERSE_IMAGE_TOPIC = "/usb_cam_reverse/image_raw"
-IMAGE_TOPIC = "/usb_cam/image_raw"
+IMAGE_TOPIC = "/usb_cam/image_raw" # oak lite pro /oak/rgb/image_raw # d400 "/d400_arm/color/image_raw" # fisheye "/usb_cam/image_raw"
+CLOSEST_NODE_TOPIC = "/closest_node"
 
 # exploration topics
 SUBGOALS_TOPIC = "/subgoals"
