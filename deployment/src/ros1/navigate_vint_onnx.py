@@ -12,7 +12,7 @@ from geometry_msgs.msg import PoseStamped, Pose, Point
 from std_msgs.msg import Bool, Float32MultiArray, Int32, Float32
 from nav_msgs.msg import Path
 from src.utils_onnx import msg_to_pil, transform_images, load_model_onnx
-
+from src.utils import to_numpy, pil_to_numpy_array, publish_overlay_image
 # from vint_train.training.train_utils import get_action
 # import torch
 import cv2
@@ -53,6 +53,33 @@ subgoal = []
 # Load the model
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # print("Using device:", device)
+
+# CAMERA
+
+
+INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101],
+                            [0.0,               237.67070839912813,  232.78147845844464],
+                            [0.0,               0.0,                 1.0]])
+
+
+CAMERA_HEIGHT = 0.250
+CAMERA_X_OFFSET = 0.200
+
+
+# first row last val offset along x (e.g -0.600 --> 60 cm forward)
+# before last row last offset along z (vertical height, e.g 0.042 --> 4.2 cm)        
+EXTRINSICS = np.array([[0, 0, 1, -CAMERA_X_OFFSET], 
+                                [-1, 0, 0, -0.000],
+                                [0, -1, 0, -CAMERA_HEIGHT],
+                                [0, 0, 0, 1]])
+
+
+DIST_COEFF = np.array([[-0.053129475318406234],
+                         [ 0.03335273788977895],
+                         [-0.031760136310879046],
+                         [ 0.008394411829175783]])  # shape (4, 1)
+
+VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
 
 
 def callback_obs(msg):
@@ -109,6 +136,7 @@ def main(args: argparse.Namespace):
     closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
     distances_pub = rospy.Publisher("/distances", Float32MultiArray, queue_size=1)
     inference_pub = rospy.Publisher("/inference_time", Float32, queue_size=10)
+    img_overlay_pub = rospy.Publisher("/wps_overlay_img", Image, queue_size=10)
 
     # navigation loop
     while not rospy.is_shutdown():
@@ -143,9 +171,9 @@ def main(args: argparse.Namespace):
                 for sg_img in goal_imgs
             ], axis=0).astype('float32')
 
-                # Repeat observation for batch
-                num_goals = len(goal_imgs)
-                batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
+            # Repeat observation for batch
+            num_goals = len(goal_imgs)
+            batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
                 
 
             distances, waypoints = vint_onnx.run(None, {
@@ -158,27 +186,41 @@ def main(args: argparse.Namespace):
             inference_time_msg.data = inference_time
             inference_pub.publish(inference_time_msg)
 
-                distances_msg = Float32MultiArray()
-                distances_msg.data = distances.flatten()
-                distances_pub.publish(distances_msg)
+            distances_msg = Float32MultiArray()
+            distances_msg.data = distances.flatten()
+            distances_pub.publish(distances_msg)
 
-                # look for closest node
-                min_dist_idx = np.argmin(distances)
+            # look for closest node
+            min_dist_idx = np.argmin(distances)
 
-                if distances[min_dist_idx] > args.close_threshold:
-                    chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
-                    closest_node = start + min_dist_idx
-                else:
-                    chosen_waypoint = waypoints[
-                        min(min_dist_idx + 1, len(waypoints) - 1)
-                    ][args.waypoint]
+            if distances[min_dist_idx] > args.close_threshold:
+                chosen_waypoint = waypoints[min_dist_idx][args.waypoint]
+                closest_node = start + min_dist_idx
+            else:
+                chosen_waypoint = waypoints[
+                    min(min_dist_idx + 1, len(waypoints) - 1)
+                ][args.waypoint]
 
-                    closest_node = min(start + min_dist_idx + 1, goal_node)
-  
-                print("closest node:", closest_node)
-                closest_node_msg = Int32()
-                closest_node_msg.data = closest_node
-                closest_node_pub.publish(closest_node_msg)
+                closest_node = min(start + min_dist_idx + 1, goal_node)
+
+
+            img = context_queue[-1]
+            img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
+            publish_overlay_image(
+                camera_matrix_orig=INTRINSICS,
+                dist_coeffs=DIST_COEFF, 
+                img=img, 
+                pub=img_overlay_pub, 
+                trajs=waypoints, 
+                viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                camera_height=CAMERA_HEIGHT,
+                camera_x_offset=CAMERA_X_OFFSET,
+                resize_factor=False)
+
+            print("closest node:", closest_node)
+            closest_node_msg = Int32()
+            closest_node_msg.data = closest_node
+            closest_node_pub.publish(closest_node_msg)
 
             # Publish visualization messages
             # Waypoint

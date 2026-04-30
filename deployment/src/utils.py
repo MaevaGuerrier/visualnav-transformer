@@ -1,5 +1,7 @@
 # ROS
 from sensor_msgs.msg import Image
+import rospy
+
 
 # pytorch
 import torch
@@ -9,7 +11,7 @@ import torchvision.transforms.functional as TF
 
 import numpy as np
 from PIL import Image as PILImage
-from typing import List
+from typing import List, Tuple, Dict, Optional
 
 # models
 from vint_train.models.gnm.gnm import GNM
@@ -21,6 +23,12 @@ from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from vint_train.data.data_utils import IMAGE_ASPECT_RATIO
 
+import cv2
+from cv_bridge import CvBridge
+
+# CAMERA image overlay
+# TODO probably cleaner way to do
+bridge = CvBridge()
 
 def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
     """Convert PIL image or numpy array to numpy array with proper formatting for Crossformer."""
@@ -193,3 +201,187 @@ def transform_images(pil_imgs: List[PILImage.Image], image_size: List[int], cent
 # clip angle between -pi and pi
 def clip_angle(angle):
     return np.mod(angle + np.pi, 2 * np.pi) - np.pi
+
+
+
+
+# FUNCTIONS FOR IMAGE OVERLAY WITH TRAJECTORIES
+
+def project_points(
+    xy: np.ndarray,
+    camera_height: float,
+    camera_x_offset: float,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+):
+    """
+    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
+    Args:
+        xy: array of shape (batch_size, horizon, 2) representing (x, y) coordinates
+    """
+    batch_size, horizon, _ = xy.shape
+
+    # create 3D coordinates with the camera positioned at the given height
+    xyz = np.concatenate(
+        [xy, camera_height * np.ones(list(xy.shape[:-1]) + [1])], axis=-1
+    )
+
+    # create dummy rotation and translation vectors
+    rvec = tvec = np.zeros((3, 1), dtype=np.float64)
+
+    xyz[..., 0] += camera_x_offset
+
+    # Convert from (x, y, z) to (y, -z, x) for cv2
+    xyz_cv = np.stack([xyz[..., 1], -xyz[..., 2], xyz[..., 0]], axis=-1)
+    
+    # done for cv2.fisheye.projectPoint requires float32/float64 and shape (N,1,3),
+    xyz_cv = xyz_cv.reshape(batch_size * horizon, 1, 3).astype(np.float64)
+
+
+    # uv, _ = cv2.projectPoints(
+    #     xyz_cv.reshape(batch_size * horizon, 3), rvec, tvec, camera_matrix, dist_coeffs
+    # )
+    uv, _ = cv2.fisheye.projectPoints(
+        xyz_cv, rvec, tvec, camera_matrix, dist_coeffs
+    )
+    
+    uv = uv.reshape(batch_size, horizon, 2)
+    
+    
+    return uv
+
+
+def get_pos_pixels(
+    points: np.ndarray,
+    camera_height: float,
+    camera_x_offset: float,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    viz_img_size: Tuple[int, int],
+):
+    """
+    Projects 3D coordinates onto a 2D image plane using the provided camera parameters.
+    """
+    pixels = project_points(
+        points[np.newaxis], camera_height, camera_x_offset, camera_matrix, dist_coeffs
+    )[0]
+    # print(pixels)
+    # Flip image horizontally
+    pixels[:, 0] = viz_img_size[0] - pixels[:, 0]
+
+    return pixels
+
+
+
+def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarray:
+    """Convert PIL image or numpy array to numpy array with proper formatting for Crossformer."""
+
+    if isinstance(image_input, PILImage.Image):
+
+        if image_input.size != target_size:
+            print(f"Resizing image from {image_input.size} to {target_size} PIL")
+            image_input = image_input.resize(target_size)
+        img_array = np.array(image_input)
+    elif isinstance(image_input, np.ndarray):
+        print(f"Resizing image from {image_input.size} to {target_size} NDARRAY")
+
+        img_array = image_input.copy()
+
+        if img_array.shape[:2] != target_size:
+            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+            elif len(img_array.shape) == 2:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8), mode='L')
+            else:
+                pil_temp = PILImage.fromarray(img_array.astype(np.uint8))
+
+            pil_temp = pil_temp.resize(target_size)
+            img_array = np.array(pil_temp)
+    else:
+        raise ValueError(f"Unsupported input type: {type(image_input)}")
+
+    if len(img_array.shape) == 2:
+        img_array = np.stack([img_array] * 3, axis=-1)
+    elif img_array.shape[-1] == 4:
+        img_array = img_array[:, :, :3]
+
+    if img_array.dtype != np.uint8:
+        img_array = img_array.astype(np.uint8)
+
+    return img_array
+
+
+def publish_overlay_image(
+    camera_matrix_orig,
+    dist_coeffs,
+    img: np.ndarray, 
+    pub: rospy.Publisher, 
+    trajs: List[np.ndarray], 
+    viz_img_size: Tuple[int, int], 
+    camera_height: float,
+    camera_x_offset: float,
+    resize_factor:bool=False ):
+
+
+    if img.dtype != np.uint8:
+        img = (img * 255).astype(np.uint8)
+
+    # Convert RGB → BGR for OpenCV
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    img = plot_trajs_and_points_on_image(
+        img=img,
+        camera_matrix=camera_matrix_orig,
+        dist_coeffs=dist_coeffs,
+        list_trajs=trajs,
+        viz_img_size=viz_img_size,
+        camera_height=camera_height,
+        camera_x_offset=camera_x_offset,
+        resize_factor=resize_factor
+    )
+
+    ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
+    ros_img.header.stamp = rospy.Time.now()
+    ros_img.header.frame_id = "base_footprint"
+    pub.publish(ros_img)
+
+def plot_trajs_and_points_on_image(
+    img: np.ndarray,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    list_trajs: list,
+    viz_img_size: Tuple[int, int],
+    camera_height: float,
+    camera_x_offset: float,
+    resize_factor:bool=False
+):
+    """
+    Plot trajectories and points on an image.
+    resize_factor: if True resize the image to viz_img_size. This is needed due to the fact that orginal image coming from fisheye is 640 x 480 and the traversability image is 224 x 224.
+    Thus the camera matrix needs to be scaled accordingly.
+    """
+
+    for traj in list_trajs:
+        xy_coords = traj[:, :2]
+        traj_pixels = get_pos_pixels(
+            xy_coords, camera_height, camera_x_offset, camera_matrix, dist_coeffs, viz_img_size
+        )
+        
+        if resize_factor: # Traversability image is 224 x 224 and the original fisheye image is 640 x 480
+            traj_pixels[:,0] *= .35
+            traj_pixels[:,1] *= .46
+
+        points = traj_pixels.astype(int).reshape(-1, 1, 2)
+
+        color = tuple(int(x) for x in np.random.choice(range(50, 255), size=3))
+
+        # inverting x,y axis so origin in image is down-left corner
+        if resize_factor:
+            points[:, :, 1] = viz_img_size[1] * .46  - 1 - points[:, :, 1]
+        else:
+            points[:, :, 1] = viz_img_size[1] - 1 - points[:, :, 1]
+
+        # Draw trajectory
+        cv2.polylines(img, [points], isClosed=False, color=color, thickness=2)
+
+    return img

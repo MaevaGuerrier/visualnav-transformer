@@ -15,7 +15,7 @@ from src.utils_onnx import msg_to_pil, transform_images, load_model_trt, load_mo
 
 
 # To DELETE AS WE CHECK THAT EACH TRT MODULE WORKS CORRECTLY -----------------------------
-from src.utils import to_numpy
+from src.utils import to_numpy, pil_to_numpy_array, publish_overlay_image
 from vint_train.training.train_utils import get_action
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 # --------------------------------------------------------------------------------
@@ -49,6 +49,36 @@ MAX_V = robot_config["max_v"]
 MAX_W = robot_config["max_w"]
 RATE = robot_config["frame_rate"] 
 VEL_TOPIC = robot_config["vel_navi_topic"]
+
+
+# CAMERA
+
+
+INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101],
+                            [0.0,               237.67070839912813,  232.78147845844464],
+                            [0.0,               0.0,                 1.0]])
+
+
+CAMERA_HEIGHT = 0.250
+CAMERA_X_OFFSET = 0.200
+
+
+# first row last val offset along x (e.g -0.600 --> 60 cm forward)
+# before last row last offset along z (vertical height, e.g 0.042 --> 4.2 cm)        
+EXTRINSICS = np.array([[0, 0, 1, -CAMERA_X_OFFSET], 
+                                [-1, 0, 0, -0.000],
+                                [0, -1, 0, -CAMERA_HEIGHT],
+                                [0, 0, 0, 1]])
+
+
+DIST_COEFF = np.array([[-0.053129475318406234],
+                         [ 0.03335273788977895],
+                         [-0.031760136310879046],
+                         [ 0.008394411829175783]])  # shape (4, 1)
+
+VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
+
+
 
 
 # Load the model 
@@ -135,6 +165,7 @@ def main(args: argparse.Namespace):
     closest_node_pub = rospy.Publisher(CLOSEST_NODE_TOPIC, Int32, queue_size=10)
     distances_pub = rospy.Publisher("/distances", Float32MultiArray, queue_size=1)
     inference_pub = rospy.Publisher("/inference_time", Float32, queue_size=10)
+    img_overlay_pub = rospy.Publisher("/wps_overlay_img", Image, queue_size=10)
 
     # navigation loop
     # print("befre while loop")
@@ -292,8 +323,23 @@ def main(args: argparse.Namespace):
                 sampled_actions_msg.data = np.concatenate((np.array([0]), naction_np.flatten()))
                 
                 sampled_actions_pub.publish(sampled_actions_msg)
-                naction_np = naction_np[0]
-                chosen_waypoint = naction_np[args.waypoint]
+                naction_selected = naction_np[0]
+                chosen_waypoint = naction_selected[args.waypoint]
+
+
+                img = context_queue[-1]
+                img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
+                publish_overlay_image(
+                    camera_matrix_orig=INTRINSICS,
+                    dist_coeffs=DIST_COEFF, 
+                    img=img, 
+                    pub=img_overlay_pub, 
+                    trajs=naction_np, 
+                    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                    camera_height=CAMERA_HEIGHT,
+                    camera_x_offset=CAMERA_X_OFFSET,
+                    resize_factor=False)
+
 
 # ------------------
 
@@ -327,7 +373,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dir",
         "-d",
-        default="mist_office",
+        default="reference_bunker_office_loop_reference_trial_1",
         type=str,
         help="path to topomap images",
     )
