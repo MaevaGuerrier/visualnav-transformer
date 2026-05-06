@@ -42,7 +42,7 @@ from src.topic_names import (
 )
 
 # MetricNet
-from src.metricnet.metricnet import MetricNet
+#from src.metricnet.metricnet import MetricNet
 
 def remove_orig_mod_prefix(state_dict: dict) -> dict:
     cleaned_state_dict = {}
@@ -62,9 +62,11 @@ def load_metricnet(weights_path):
     return model
 
 
+#TODO REMOVE DUPLICA
+
 # CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-ROBOT_CONFIG_PATH = "../config/robot.yaml"
+TOPOMAP_IMAGES_DIR = "../../topomaps/images"
+ROBOT_CONFIG_PATH = "../../config/robot.yaml"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]
@@ -89,7 +91,7 @@ INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101
                             [0.0,               0.0,                 1.0]])
 
 
-CAMERA_HEIGHT = 0.250
+CAMERA_HEIGHT = 0.560
 CAMERA_X_OFFSET = 0.200
 
 
@@ -130,10 +132,10 @@ def callback_obs(msg):
 
 
 # CONSTANTS
-TOPOMAP_IMAGES_DIR = "../topomaps/images"
-MODEL_WEIGHTS_PATH = "../model_weights"
-ROBOT_CONFIG_PATH ="../config/robot.yaml"
-MODEL_CONFIG_PATH = "../config/models.yaml"
+TOPOMAP_IMAGES_DIR = "../../topomaps/images"
+MODEL_WEIGHTS_PATH = "../../model_weights"
+ROBOT_CONFIG_PATH ="../../config/robot.yaml"
+MODEL_CONFIG_PATH = "../../config/models.yaml"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     robot_config = yaml.safe_load(f)
 MAX_V = robot_config["max_v"]
@@ -256,6 +258,9 @@ def main(args: argparse.Namespace):
                 metricnet_obs_img = transform_images(
                     context_queue[-1:], [224, 224], center_crop=crop
                 )
+                
+
+                print(f"shape of metricnet_obs_img before transpose: {metricnet_obs_img.shape}")
 
                 # Vectorized goal processing
                 goal_imgs = topomap[start:end + 1]  
@@ -389,16 +394,16 @@ def main(args: argparse.Namespace):
                     obs = batch_metricnet_obs_imgs[:, -3:, :, :].astype(np.float32)
                     unscaled_waypoints_np = get_action(naction_torch).cpu().numpy()
                     wpts = unscaled_waypoints_np
+                    print(obs.shape)
+                    print(wpts.shape)
                     inputs = {
                         "obs_img": obs.astype(np.float32),
                         "waypoint": wpts.astype(np.float32),
                     }
+
+                    print(f"Shape input metricnet obs: {inputs['obs_img'].shape}, waypoint: {inputs['waypoint'].shape}")
                     onnx_out = metricnet.run(["scale_output"], inputs)[0]
                     scale = onnx_out / 1000
-                    #scale = metricnet(
-                    #    obs,
-                    #    wpts
-                    #) / 1000
                     scaled_waypoints_np = unscaled_waypoints_np * scale[:, None, None]
 
                     inference_time = time.time() - start_time
@@ -418,16 +423,16 @@ def main(args: argparse.Namespace):
 
                 img = context_queue[-1]
                 img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
-                publish_overlay_image(
-                    camera_matrix_orig=INTRINSICS,
-                    dist_coeffs=DIST_COEFF, 
-                    img=img, 
-                    pub=img_overlay_pub, 
-                    trajs=scaled_waypoints_np, 
-                    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
-                    camera_height=CAMERA_HEIGHT,
-                    camera_x_offset=CAMERA_X_OFFSET,
-                    resize_factor=False)
+                #publish_overlay_image(
+                #    camera_matrix_orig=INTRINSICS,
+                #    dist_coeffs=DIST_COEFF, 
+                #    img=img, 
+                #    pub=img_overlay_pub, 
+                #    trajs=scaled_waypoints_np_selected, 
+                #    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                #    camera_height=CAMERA_HEIGHT,
+                #    camera_x_offset=CAMERA_X_OFFSET,
+                #    resize_factor=False)
 
 # ------------------
 

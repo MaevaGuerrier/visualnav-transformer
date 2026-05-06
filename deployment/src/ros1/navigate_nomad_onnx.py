@@ -59,7 +59,7 @@ INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101
                             [0.0,               0.0,                 1.0]])
 
 
-CAMERA_HEIGHT = 0.250
+CAMERA_HEIGHT = 0.560
 CAMERA_X_OFFSET = 0.200
 
 
@@ -326,29 +326,28 @@ def main(args: argparse.Namespace):
                 naction_selected = naction_np[0]
                 chosen_waypoint = naction_selected[args.waypoint]
 
+                # RECOVERY MODE
+                if model_params["normalize"]:
+                    chosen_waypoint[:2] *= MAX_V / RATE
+                waypoint_msg = Float32MultiArray()
+                waypoint_msg.data = chosen_waypoint
+                waypoint_pub.publish(waypoint_msg)
 
                 img = context_queue[-1]
                 img = pil_to_numpy_array(image_input=img, target_size=VIZ_IMAGE_SIZE_FISHEYE)
-                publish_overlay_image(
-                    camera_matrix_orig=INTRINSICS,
-                    dist_coeffs=DIST_COEFF, 
-                    img=img, 
-                    pub=img_overlay_pub, 
-                    trajs=naction_np, 
-                    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
-                    camera_height=CAMERA_HEIGHT,
-                    camera_x_offset=CAMERA_X_OFFSET,
-                    resize_factor=False)
+                #publish_overlay_image(
+                #    camera_matrix_orig=INTRINSICS,
+                #    dist_coeffs=DIST_COEFF, 
+                #    img=img, 
+                #    pub=img_overlay_pub, 
+                #    trajs=chosen_waypoint, 
+                #    viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
+                #    camera_height=CAMERA_HEIGHT,
+                #    camera_x_offset=CAMERA_X_OFFSET,
+                #    resize_factor=False)
 
 
 # ------------------
-
-        # RECOVERY MODE
-        if model_params["normalize"]:
-            chosen_waypoint[:2] *= MAX_V / RATE
-        waypoint_msg = Float32MultiArray()
-        waypoint_msg.data = chosen_waypoint
-        waypoint_pub.publish(waypoint_msg)
 
         reached_goal = closest_node == goal_node
         goal_pub.publish(reached_goal)

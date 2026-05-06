@@ -64,7 +64,7 @@ INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101
                             [0.0,               0.0,                 1.0]])
 
 
-CAMERA_HEIGHT = 0.250
+CAMERA_HEIGHT = 0.560
 CAMERA_X_OFFSET = 0.200
 
 
@@ -259,7 +259,7 @@ def main(args: argparse.Namespace):
                     dist_coeffs=DIST_COEFF, 
                     img=img, 
                     pub=img_overlay_pub, 
-                    trajs=waypoints, 
+                    trajs=waypoints[min_dist_idx][None], 
                     viz_img_size=VIZ_IMAGE_SIZE_FISHEYE,
                     camera_height=CAMERA_HEIGHT,
                     camera_x_offset=CAMERA_X_OFFSET,

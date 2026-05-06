@@ -12,9 +12,9 @@ from PIL import Image as PILImage
 from typing import List
 import onnxruntime as ort
 
-import tensorrt as trt
-import pycuda.driver as cuda
-import pycuda.autoinit
+# import tensorrt as trt
+# import pycuda.driver as cuda
+# import pycuda.autoinit
 from typing import Dict, List, Optional
 
 # from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
@@ -25,228 +25,224 @@ IMAGE_ASPECT_RATIO = 4 / 3
 
 ACTION_STATS = {"min": [-2.5, -4], "max": [5, 4]}
 
-
-import tensorrt as trt
-import pycuda.driver as cuda
-import pycuda.autoinit
 import numpy as np
 from typing import Dict, List
 
 
-class TRTInfer:
-    def __init__(
-        self,
-        engine_path: str,
-        logger_severity: trt.ILogger.Severity = trt.Logger.WARNING,
-    ):
-        """
-        Initialize TensorRT inference engine.
+# class TRTInfer:
+#     def __init__(
+#         self,
+#         engine_path: str,
+#         logger_severity: trt.ILogger.Severity = trt.Logger.WARNING,
+#     ):
+#         """
+#         Initialize TensorRT inference engine.
 
-        Args:
-            engine_path: Path to serialized TensorRT engine file
-            logger_severity: TensorRT logger severity level
-        """
-        self.TRT_LOGGER = trt.Logger(logger_severity)
+#         Args:
+#             engine_path: Path to serialized TensorRT engine file
+#             logger_severity: TensorRT logger severity level
+#         """
+#         self.TRT_LOGGER = trt.Logger(logger_severity)
 
-        # Load engine
-        with open(engine_path, "rb") as f:
-            engine_data = f.read()
+#         # Load engine
+#         with open(engine_path, "rb") as f:
+#             engine_data = f.read()
 
-        runtime = trt.Runtime(self.TRT_LOGGER)
-        self.engine = runtime.deserialize_cuda_engine(engine_data)
+#         runtime = trt.Runtime(self.TRT_LOGGER)
+#         self.engine = runtime.deserialize_cuda_engine(engine_data)
 
-        if self.engine is None:
-            raise RuntimeError(f"Failed to load engine from {engine_path}")
+#         if self.engine is None:
+#             raise RuntimeError(f"Failed to load engine from {engine_path}")
 
-        self.context = self.engine.create_execution_context()
-        self.stream = cuda.Stream()
+#         self.context = self.engine.create_execution_context()
+#         self.stream = cuda.Stream()
 
-        # Store tensor info without pre-allocating memory
-        self.input_specs = []
-        self.output_specs = []
+#         # Store tensor info without pre-allocating memory
+#         self.input_specs = []
+#         self.output_specs = []
 
-        num_io_tensors = self.engine.num_io_tensors
+#         num_io_tensors = self.engine.num_io_tensors
 
-        for i in range(num_io_tensors):
-            name = self.engine.get_tensor_name(i)
-            shape = self.engine.get_tensor_shape(name)
-            dtype = trt.nptype(self.engine.get_tensor_dtype(name))
-            mode = self.engine.get_tensor_mode(name)
+#         for i in range(num_io_tensors):
+#             name = self.engine.get_tensor_name(i)
+#             shape = self.engine.get_tensor_shape(name)
+#             dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+#             mode = self.engine.get_tensor_mode(name)
 
-            tensor_spec = {
-                "name": name,
-                "shape": shape,
-                "dtype": dtype,
-            }
+#             tensor_spec = {
+#                 "name": name,
+#                 "shape": shape,
+#                 "dtype": dtype,
+#             }
 
-            if mode == trt.TensorIOMode.INPUT:
-                self.input_specs.append(tensor_spec)
-            elif mode == trt.TensorIOMode.OUTPUT:
-                self.output_specs.append(tensor_spec)
+#             if mode == trt.TensorIOMode.INPUT:
+#                 self.input_specs.append(tensor_spec)
+#             elif mode == trt.TensorIOMode.OUTPUT:
+#                 self.output_specs.append(tensor_spec)
 
-        # Allocate buffers on first inference
-        self.input_buffers = {}
-        self.output_buffers = {}
+#         # Allocate buffers on first inference
+#         self.input_buffers = {}
+#         self.output_buffers = {}
 
-    def _allocate_buffer(
-        self, name: str, shape: tuple, dtype: np.dtype
-    ) -> cuda.DeviceAllocation:
-        """Allocate or reallocate device buffer if needed."""
-        size = int(np.prod(shape) * dtype().itemsize)  # Convert to Python int
+#     def _allocate_buffer(
+#         self, name: str, shape: tuple, dtype: np.dtype
+#     ) -> cuda.DeviceAllocation:
+#         """Allocate or reallocate device buffer if needed."""
+#         size = int(np.prod(shape) * dtype().itemsize)  # Convert to Python int
 
-        # Check if buffer exists and is large enough
-        buffer_dict = (
-            self.input_buffers
-            if any(s["name"] == name for s in self.input_specs)
-            else self.output_buffers
-        )
+#         # Check if buffer exists and is large enough
+#         buffer_dict = (
+#             self.input_buffers
+#             if any(s["name"] == name for s in self.input_specs)
+#             else self.output_buffers
+#         )
 
-        if name in buffer_dict:
-            old_buffer, old_size = buffer_dict[name]
-            if old_size >= size:
-                return old_buffer
-            else:
-                # Free old buffer and allocate new one
-                old_buffer.free()
+#         if name in buffer_dict:
+#             old_buffer, old_size = buffer_dict[name]
+#             if old_size >= size:
+#                 return old_buffer
+#             else:
+#                 # Free old buffer and allocate new one
+#                 old_buffer.free()
 
-        # Allocate new buffer
-        new_buffer = cuda.mem_alloc(size)
-        buffer_dict[name] = (new_buffer, size)
-        return new_buffer
+#         # Allocate new buffer
+#         new_buffer = cuda.mem_alloc(size)
+#         buffer_dict[name] = (new_buffer, size)
+#         return new_buffer
 
-    def infer(self, **kwargs) -> List[np.ndarray]:
-        """
-        Run inference.
+#     def infer(self, **kwargs) -> List[np.ndarray]:
+#         """
+#         Run inference.
 
-        Args:
-            **kwargs: input_name -> np.ndarray mappings
+#         Args:
+#             **kwargs: input_name -> np.ndarray mappings
 
-        Returns:
-            List of np.ndarray corresponding to outputs
-        """
-        # Validate inputs
-        input_names = {spec["name"] for spec in self.input_specs}
-        provided_names = set(kwargs.keys())
+#         Returns:
+#             List of np.ndarray corresponding to outputs
+#         """
+#         # Validate inputs
+#         input_names = {spec["name"] for spec in self.input_specs}
+#         provided_names = set(kwargs.keys())
 
-        if input_names != provided_names:
-            raise ValueError(
-                f"Input mismatch. Expected: {input_names}, Got: {provided_names}"
-            )
+#         if input_names != provided_names:
+#             raise ValueError(
+#                 f"Input mismatch. Expected: {input_names}, Got: {provided_names}"
+#             )
 
-        # Process inputs
-        for spec in self.input_specs:
-            name = spec["name"]
-            data = kwargs[name]
+#         # Process inputs
+#         for spec in self.input_specs:
+#             name = spec["name"]
+#             data = kwargs[name]
 
-            # Validate and convert dtype if needed
-            if data.dtype != spec["dtype"]:
-                data = data.astype(spec["dtype"])
+#             # Validate and convert dtype if needed
+#             if data.dtype != spec["dtype"]:
+#                 data = data.astype(spec["dtype"])
 
-            # Set input shape for dynamic shapes
-            actual_shape = data.shape
-            if self.context.get_tensor_shape(name) != actual_shape:
-                if not self.context.set_input_shape(name, actual_shape):
-                    raise RuntimeError(
-                        f"Failed to set shape {actual_shape} for input '{name}'"
-                    )
+#             # Set input shape for dynamic shapes
+#             actual_shape = data.shape
+#             if self.context.get_tensor_shape(name) != actual_shape:
+#                 if not self.context.set_input_shape(name, actual_shape):
+#                     raise RuntimeError(
+#                         f"Failed to set shape {actual_shape} for input '{name}'"
+#                     )
 
-            # Allocate/reallocate buffer if needed
-            device_buffer = self._allocate_buffer(name, actual_shape, spec["dtype"])
+#             # Allocate/reallocate buffer if needed
+#             device_buffer = self._allocate_buffer(name, actual_shape, spec["dtype"])
 
-            # Copy data to device
-            data_contiguous = np.ascontiguousarray(data.ravel())
-            cuda.memcpy_htod_async(device_buffer, data_contiguous, self.stream)
+#             # Copy data to device
+#             data_contiguous = np.ascontiguousarray(data.ravel())
+#             cuda.memcpy_htod_async(device_buffer, data_contiguous, self.stream)
 
-            # Set tensor address
-            self.context.set_tensor_address(name, int(device_buffer))
+#             # Set tensor address
+#             self.context.set_tensor_address(name, int(device_buffer))
 
-        # Allocate output buffers
-        for spec in self.output_specs:
-            name = spec["name"]
-            # Get actual output shape (may be dynamic)
-            output_shape = self.context.get_tensor_shape(name)
+#         # Allocate output buffers
+#         for spec in self.output_specs:
+#             name = spec["name"]
+#             # Get actual output shape (may be dynamic)
+#             output_shape = self.context.get_tensor_shape(name)
 
-            # Allocate buffer
-            device_buffer = self._allocate_buffer(name, output_shape, spec["dtype"])
+#             # Allocate buffer
+#             device_buffer = self._allocate_buffer(name, output_shape, spec["dtype"])
 
-            # Set tensor address
-            self.context.set_tensor_address(name, int(device_buffer))
+#             # Set tensor address
+#             self.context.set_tensor_address(name, int(device_buffer))
 
-        # Execute inference
-        success = self.context.execute_async_v3(self.stream.handle)
-        if not success:
-            raise RuntimeError("Inference execution failed")
+#         # Execute inference
+#         success = self.context.execute_async_v3(self.stream.handle)
+#         if not success:
+#             raise RuntimeError("Inference execution failed")
 
-        # Copy outputs back to host
-        output_arrays = []
-        for spec in self.output_specs:
-            name = spec["name"]
-            output_shape = self.context.get_tensor_shape(name)
+#         # Copy outputs back to host
+#         output_arrays = []
+#         for spec in self.output_specs:
+#             name = spec["name"]
+#             output_shape = self.context.get_tensor_shape(name)
 
-            # Allocate host memory
-            host_arr = np.empty(output_shape, dtype=spec["dtype"])
+#             # Allocate host memory
+#             host_arr = np.empty(output_shape, dtype=spec["dtype"])
 
-            # Get device buffer
-            device_buffer, _ = self.output_buffers[name]
+#             # Get device buffer
+#             device_buffer, _ = self.output_buffers[name]
 
-            # Copy from device to host
-            cuda.memcpy_dtoh_async(host_arr, device_buffer, self.stream)
-            output_arrays.append(host_arr)
+#             # Copy from device to host
+#             cuda.memcpy_dtoh_async(host_arr, device_buffer, self.stream)
+#             output_arrays.append(host_arr)
 
-        # Synchronize stream
-        self.stream.synchronize()
+#         # Synchronize stream
+#         self.stream.synchronize()
 
-        return output_arrays
+#         return output_arrays
 
-    def infer_dict(self, **kwargs) -> Dict[str, np.ndarray]:
-        """
-        Run inference and return outputs as a dictionary.
+#     def infer_dict(self, **kwargs) -> Dict[str, np.ndarray]:
+#         """
+#         Run inference and return outputs as a dictionary.
 
-        Args:
-            **kwargs: input_name -> np.ndarray mappings
+#         Args:
+#             **kwargs: input_name -> np.ndarray mappings
 
-        Returns:
-            Dict mapping output names to np.ndarray
-        """
-        output_arrays = self.infer(**kwargs)
-        return {
-            spec["name"]: arr for spec, arr in zip(self.output_specs, output_arrays)
-        }
+#         Returns:
+#             Dict mapping output names to np.ndarray
+#         """
+#         output_arrays = self.infer(**kwargs)
+#         return {
+#             spec["name"]: arr for spec, arr in zip(self.output_specs, output_arrays)
+#         }
 
-    def get_input_info(self) -> List[Dict]:
-        """Get information about input tensors."""
-        return [
-            {"name": s["name"], "shape": s["shape"], "dtype": s["dtype"]}
-            for s in self.input_specs
-        ]
+#     def get_input_info(self) -> List[Dict]:
+#         """Get information about input tensors."""
+#         return [
+#             {"name": s["name"], "shape": s["shape"], "dtype": s["dtype"]}
+#             for s in self.input_specs
+#         ]
 
-    def get_output_info(self) -> List[Dict]:
-        """Get information about output tensors."""
-        return [
-            {"name": s["name"], "shape": s["shape"], "dtype": s["dtype"]}
-            for s in self.output_specs
-        ]
+#     def get_output_info(self) -> List[Dict]:
+#         """Get information about output tensors."""
+#         return [
+#             {"name": s["name"], "shape": s["shape"], "dtype": s["dtype"]}
+#             for s in self.output_specs
+#         ]
 
-    def __del__(self):
-        """Cleanup resources."""
-        try:
-            # Free input buffers
-            for buffer, _ in self.input_buffers.values():
-                if hasattr(buffer, "free"):
-                    buffer.free()
+#     def __del__(self):
+#         """Cleanup resources."""
+#         try:
+#             # Free input buffers
+#             for buffer, _ in self.input_buffers.values():
+#                 if hasattr(buffer, "free"):
+#                     buffer.free()
 
-            # Free output buffers
-            for buffer, _ in self.output_buffers.values():
-                if hasattr(buffer, "free"):
-                    buffer.free()
-        except:
-            pass
+#             # Free output buffers
+#             for buffer, _ in self.output_buffers.values():
+#                 if hasattr(buffer, "free"):
+#                     buffer.free()
+#         except:
+#             pass
 
-    def __enter__(self):
-        return self
+#     def __enter__(self):
+#         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.__del__()
+#     def __exit__(self, exc_type, exc_val, exc_tb):
+#         self.__del__()
 
 
 def load_model_onnx(model_name: str):
