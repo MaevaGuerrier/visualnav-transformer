@@ -261,26 +261,27 @@ def load_model_onnx(model_name: str):
 
     sess_options = ort.SessionOptions()
     # # sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
-    # sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     # sess_options.log_severity_level = 3
     # ort_session = ort.InferenceSession(
     #     f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx", sess_options, providers=providers
     # )
-    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    session = ort.InferenceSession(
+    #sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    ort_session = ort.InferenceSession(
         f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx",
         sess_options,
-        disabled_optimizers=["MatMulAddFusion"]
+        disabled_optimizers=["MatMulAddFusion"],
+        providers=providers,
     )
 
     return ort_session
 
 
-def load_model_trt(model_name: str):
+# def load_model_trt(model_name: str):
 
-    trt_model = TRTInfer(model_name)
+#     trt_model = TRTInfer(model_name)
 
-    return trt_model
+#     return trt_model
 
 
 def msg_to_pil(msg: Image) -> PILImage.Image:

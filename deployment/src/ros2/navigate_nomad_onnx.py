@@ -486,7 +486,8 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         print("\n[Shutdown] KeyboardInterrupt received...")
-    finally:
+    except Exception as e:
+        print(f"\n[Shutdown] Unexpected error occurred: {e}")
         if node is not None:
             # 1. Stop all timers/subscriptions/publishers first
             node.destroy_node()
