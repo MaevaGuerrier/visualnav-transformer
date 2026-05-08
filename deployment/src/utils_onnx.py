@@ -257,12 +257,20 @@ def load_model_onnx(model_name: str):
     #     )
     # ]
 
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]  
+    providers = ["CUDAExecutionProvider"]  
 
     sess_options = ort.SessionOptions()
-    sess_options.log_severity_level = 3
-    ort_session = ort.InferenceSession(
-        f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx", sess_options, providers=providers
+    # # sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    # sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    # sess_options.log_severity_level = 3
+    # ort_session = ort.InferenceSession(
+    #     f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx", sess_options, providers=providers
+    # )
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    session = ort.InferenceSession(
+        f"/workspace/src/visualnav-transformer/deployment/model_weights/{model_name}.onnx",
+        sess_options,
+        disabled_optimizers=["MatMulAddFusion"]
     )
 
     return ort_session

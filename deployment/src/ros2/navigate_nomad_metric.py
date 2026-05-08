@@ -5,7 +5,7 @@ import os
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, List
+from typing import Deque, List, Tuple
 import onnxruntime as ort
 import gc
 
@@ -78,7 +78,7 @@ class NavigationNode(Node):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.get_logger().info(f"Using device: {self.device}")
 
-        self.vis_encoder, self.dist_pred, self.noise_pred, self.noise_scheduler, self.model_params = self._load_model()
+        self.vis_encoder, self.dist_pred, self.noise_pred, self.noise_scheduler, self.metricnet,self.model_params = self._load_model()
 
         self.context_size: int = self.model_params["context_size"]
         assert self.context_size != None
@@ -86,7 +86,7 @@ class NavigationNode(Node):
         self.num_diffusion_iters = self.model_params["num_diffusion_iters"]
 
         self.bridge = CvBridge()
-        self.context_queue = deque(maxlen=self.context_size + 1)
+        self.context_queue = []
         self.last_ctx_time = self.get_clock().now()
         self.ctx_dt = 0.25
 
@@ -124,6 +124,7 @@ class NavigationNode(Node):
         self.closest_node_pub = self.create_publisher(Int32, CLOSEST_NODE_TOPIC, 10)
         self.distances_pub = self.create_publisher(Float32MultiArray, "/distances", 1)
         self.inference_pub = self.create_publisher(Float32, "/inference_time", 10)
+        self.img_overlay_pub = self.create_publisher(Image, "/wps_overlay_img", 1)
 
 
         #########################################################################
@@ -198,6 +199,7 @@ class NavigationNode(Node):
         self.get_logger().info(f"  - Robot symbol length: 10 pixels")
         self.get_logger().info("=" * 60)
 
+
     # Helper: topomap
     # ------------------------------------------------------------------
 
@@ -222,12 +224,13 @@ class NavigationNode(Node):
         return topomap, goal_node
 
     def _image_cb(self, msg: Image):
+        obs_img = msg_to_pil(msg)
+        if len(self.context_queue) < self.context_size + 1:
+            self.context_queue.append(obs_img)
+        else:
+            self.context_queue.pop(0)
+            self.context_queue.append(obs_img)
 
-        self.context_queue.append(msg_to_pil(msg))
-        # self.last_ctx_time = now
-        # self.get_logger().info(
-        #     f"Image added to context queue ({len(self.context_queue)})"
-        # )
 
     def _timer_cb(self):
         if len(self.context_queue) <= self.context_size:
@@ -256,9 +259,12 @@ class NavigationNode(Node):
         print("loaded distance predictor onnx model")
         noise_pred = load_model_onnx("nomad_noise_pred_net")
         print("loaded noise predictor onnx model")
+        metricnet = load_model_onnx("metricnet")
+        print("loaded metricnet onnx model")
 
 
-        return vis_encoder, dist_pred, noise_pred, noise_scheduler, model_params
+
+        return vis_encoder, dist_pred, noise_pred, noise_scheduler, metricnet, model_params
 
 
 
@@ -278,6 +284,11 @@ class NavigationNode(Node):
             list(self.context_queue), self.model_params["image_size"], center_crop=crop
         )
 
+        # METRICNET - Prepare most recent obs image for metricnet (with different size)
+        metricnet_obs_img = transform_images(
+            self.context_queue[-1:], [224, 224], center_crop=crop
+        )
+
         # Vectorized goal processing
         goal_imgs = self.topomap[start:end + 1]  
         batch_goal_data_np = np.concatenate([
@@ -289,6 +300,11 @@ class NavigationNode(Node):
         num_goals = len(goal_imgs)
         batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
         input_goal_mask_np = np.zeros((num_goals,), dtype=np.int64)
+
+        # METRICNET 
+        batch_metricnet_obs_imgs = np.tile(
+                    metricnet_obs_img, (self.args.num_samples, 1, 1, 1)
+        ).astype('float16')
                
 
         ort_inputs = {
@@ -304,12 +320,18 @@ class NavigationNode(Node):
         except Exception as e:
             self.get_logger().error(f"Inference failed vis_encoder: {e}")
         except KeyboardInterrupt:
+            # Catching it here prevents the C++ session from being 
+            # left in an unrecoverable state during the jump to 'finally'
             self.get_logger().info("Inference vis_encoder interrupted by user.")
+            raise # Re-raise to allow the main loop to catch it
+
+
 
         ort_inputs = {
             "obsgoal_cond": obsgoal_cond,
         }
         
+        # To handle garbage collect and double free corruption C error
         try:
             distances =  self.dist_pred.run(None, ort_inputs)[0]
         except Exception as e:
@@ -317,11 +339,16 @@ class NavigationNode(Node):
         except KeyboardInterrupt:
             self.get_logger().info("Inference dist_pred interrupted by user.")
 
+
+        # TODO PUB DISTANCES
+        distances_msg = Float32MultiArray()
+        distances_msg.data = distances.flatten().tolist()
+        self.distances_pub.publish(distances_msg)
+
         min_dist_idx = np.argmin(distances)
 
         self.closest_node = min_dist_idx + start
         print("closest node:", self.closest_node)
-
         closest_node_msg = Int32()
         closest_node_msg.data = int(self.closest_node)
         self.closest_node_pub.publish(closest_node_msg)
@@ -380,6 +407,29 @@ class NavigationNode(Node):
                 ).prev_sample
                 naction_np = naction_torch.detach().cpu().numpy()
 
+
+            obs = batch_metricnet_obs_imgs[:, -3:, :, :].astype(np.float32)
+            unscaled_waypoints_np = get_action(naction_torch).cpu().numpy()
+            wpts = unscaled_waypoints_np
+            # print(obs.shape)
+            # print(wpts.shape)
+            inputs = {
+                "obs_img": obs.astype(np.float32),
+                "waypoint": wpts.astype(np.float32),
+            }
+
+            # print(f"Shape input metricnet obs: {inputs['obs_img'].shape}, waypoint: {inputs['waypoint'].shape}")
+            try:
+                onnx_out = self.metricnet.run(["scale_output"], inputs)[0]
+            except Exception as e:
+                self.get_logger().error(f"Inference failed metricnet: {e}")
+            except KeyboardInterrupt:
+                self.get_logger().info("Inference metricnet interrupted by user.")
+
+            scale = onnx_out / 1000
+            scaled_waypoints_np = unscaled_waypoints_np * scale[:, None, None]
+
+
             inference_time = time.time() - start_time
             self.get_logger().info(f"Inference time: {inference_time:.3f} seconds")
 
@@ -387,14 +437,12 @@ class NavigationNode(Node):
             inference_time_msg.data = inference_time
             self.inference_pub.publish(inference_time_msg)
 
-        naction_np = to_numpy(get_action(naction_torch))
+        sampled_actions_msg = Float32MultiArray()
+        sampled_actions_msg.data = np.concatenate((np.array([0]), unscaled_waypoints_np.flatten())).tolist()
+        self.sampled_actions_pub.publish(sampled_actions_msg)
 
-        naction_np = naction_np[0] 
-        chosen_waypoint = naction_np[self.args.waypoint]
-
-
-        if self.model_params["normalize"]:
-            chosen_waypoint[:2] *= MAX_V / RATE
+        scaled_waypoints_np_selected = scaled_waypoints_np[0]
+        chosen_waypoint = scaled_waypoints_np_selected[self.args.waypoint]
 
         waypoint_msg = Float32MultiArray()
         waypoint_msg.data = chosen_waypoint.tolist()

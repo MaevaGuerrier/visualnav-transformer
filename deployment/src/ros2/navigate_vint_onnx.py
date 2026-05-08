@@ -7,6 +7,7 @@ from collections import deque
 from pathlib import Path
 from typing import Deque, List
 import onnxruntime as ort
+import gc
 
 import cv2
 import numpy as np
@@ -49,6 +50,27 @@ def _load_model():
 
     return model, model_params
 
+# CAMERA ===============================================================
+
+INTRINSICS = np.array([[235.7444344725863, 2.2822917369575983, 320.3212422370101],
+                            [0.0,               237.67070839912813,  232.78147845844464],
+                            [0.0,               0.0,                 1.0]])
+
+CAMERA_HEIGHT = 0.560
+CAMERA_X_OFFSET = 0.200
+# first row last val offset along x (e.g -0.600 --> 60 cm forward)
+# before last row last offset along z (vertical height, e.g 0.042 --> 4.2 cm)        
+EXTRINSICS = np.array([[0, 0, 1, -CAMERA_X_OFFSET], 
+                                [-1, 0, 0, -0.000],
+                                [0, -1, 0, -CAMERA_HEIGHT],
+                                [0, 0, 0, 1]])
+DIST_COEFF = np.array([[-0.053129475318406234],
+                         [ 0.03335273788977895],
+                         [-0.031760136310879046],
+                         [ 0.008394411829175783]])  # shape (4, 1)
+VIZ_IMAGE_SIZE_FISHEYE = (640, 480) # (640, 480) orig fisheye image size
+
+# ======================================================================
 
 class NavigationNode(Node):
     """Sub‑goal navigation with topomap + trajectory visualisation."""
@@ -133,12 +155,7 @@ class NavigationNode(Node):
         self.get_logger().info(
             f"  - Normalize: {self.model_params.get('normalize', False)}"
         )
-        self.get_logger().info("-" * 60)
-        self.get_logger().info("DEPTH MODEL CONFIGURATION:")
-        self.get_logger().info(f"  - UniDepth model: UniDepthV2")
-        self.get_logger().info(
-            f"  - Pretrained weights: lpiccinelli/unidepth-v2-vits14"
-        )
+
         self.get_logger().info("-" * 60)
         self.get_logger().info("TOPOLOGICAL MAP CONFIGURATION:")
         self.get_logger().info(f"  - Topomap directory: {self.args.dir}")
@@ -248,11 +265,16 @@ class NavigationNode(Node):
         num_goals = len(goal_imgs)
         batch_obs_imgs_np = np.tile(transf_obs_img, (num_goals, 1, 1, 1)).astype('float32')
         
-
-        distances, waypoints = self.model.run(None, {
+        try:
+            distances, waypoints = self.model.run(None, {
             "obs_img": batch_obs_imgs_np,
             "goal_img": batch_goal_data_np,
-        })
+            })
+        except Exception as e:
+            self.get_logger().error(f"Inference failed: {e}")
+        except KeyboardInterrupt:
+            self.get_logger().info("Inference interrupted by user.")
+
         inference_time = time.time() - start_time
         self.get_logger().info(f"Inference time: {inference_time:.3f} seconds")
 
@@ -395,14 +417,27 @@ def main():
     args = parser.parse_args()
 
     rclpy.init()
-    node = NavigationNode(args)
+    node = None
     try:
+        node = NavigationNode(args)
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        print("\n[Shutdown] KeyboardInterrupt received...")
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        if node is not None:
+            # 1. Stop all timers/subscriptions/publishers first
+            node.destroy_node()
+            node.model = None  # Explicitly release model resources before shutdown
+            # 2. Delete the node object entirely to drop references
+            del node
+            
+        # 3. Clear model from memory before rclpy.shutdown
+        gc.collect()
+        
+        if rclpy.ok():
+            rclpy.shutdown()
+
+        os._exit(0)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ from src.topic_names import (
 )
 
 # MetricNet
-#from src.metricnet.metricnet import MetricNet
+from src.metricnet.metricnet import MetricNet
 
 def remove_orig_mod_prefix(state_dict: dict) -> dict:
     cleaned_state_dict = {}

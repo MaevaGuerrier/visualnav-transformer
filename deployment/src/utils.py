@@ -1,6 +1,5 @@
 # ROS
 from sensor_msgs.msg import Image
-import rospy
 
 
 # pytorch
@@ -205,7 +204,7 @@ def clip_angle(angle):
 
 
 
-# FUNCTIONS FOR IMAGE OVERLAY WITH TRAJECTORIES
+# # FUNCTIONS FOR IMAGE OVERLAY WITH TRAJECTORIES
 
 def project_points(
     xy: np.ndarray,
@@ -310,40 +309,6 @@ def pil_to_numpy_array(image_input, target_size: tuple = (224, 224)) -> np.ndarr
 
     return img_array
 
-
-def publish_overlay_image(
-    camera_matrix_orig,
-    dist_coeffs,
-    img: np.ndarray, 
-    pub: rospy.Publisher, 
-    trajs: List[np.ndarray], 
-    viz_img_size: Tuple[int, int], 
-    camera_height: float,
-    camera_x_offset: float,
-    resize_factor:bool=False ):
-
-
-    if img.dtype != np.uint8:
-        img = (img * 255).astype(np.uint8)
-
-    # Convert RGB → BGR for OpenCV
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-    img = plot_trajs_and_points_on_image(
-        img=img,
-        camera_matrix=camera_matrix_orig,
-        dist_coeffs=dist_coeffs,
-        list_trajs=trajs,
-        viz_img_size=viz_img_size,
-        camera_height=camera_height,
-        camera_x_offset=camera_x_offset,
-        resize_factor=resize_factor
-    )
-
-    ros_img = bridge.cv2_to_imgmsg(img, encoding="bgr8")
-    ros_img.header.stamp = rospy.Time.now()
-    ros_img.header.frame_id = "base_footprint"
-    pub.publish(ros_img)
 
 def plot_trajs_and_points_on_image(
     img: np.ndarray,
