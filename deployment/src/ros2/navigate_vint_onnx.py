@@ -87,7 +87,7 @@ class NavigationNode(Node):
         self.context_size: int = self.model_params["context_size"]
 
         self.bridge = CvBridge()
-        self.context_queue = deque(maxlen=self.context_size + 1)
+        self.context_queue = []
         self.last_ctx_time = self.get_clock().now()
         self.ctx_dt = 0.25
 
@@ -104,8 +104,9 @@ class NavigationNode(Node):
         # Topological map ----------------------------------------------------
         self.topomap, self.goal_node = self._load_topomap(args.dir, args.goal_node)
         self.closest_node = 0
+        self.last_img_time = 0
 
-        self.create_subscription(Image, IMAGE_TOPIC, self._image_cb, 1)
+        self.create_subscription(Image, IMAGE_TOPIC, self._callback_obs_ctrl_rate, 1)
         self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
         self.sampled_actions_pub = self.create_publisher(
             Float32MultiArray, SAMPLED_ACTIONS_TOPIC, 1
@@ -221,6 +222,25 @@ class NavigationNode(Node):
             goal_node = len(topomap) - 1
 
         return topomap, goal_node
+
+
+    # This make it to be actually 4hz same as control frequency
+    def _callback_obs_ctrl_rate(self, msg: Image):
+        
+        current_time = time.time()
+        if current_time - self.last_img_time < 1.0 / RATE:
+            return  # Skip this frame
+        
+        self.last_img_time = current_time
+        
+        obs_img = msg_to_pil(msg)
+        if self.context_size is not None:
+            if len(self.context_queue) < self.context_size + 1:
+                self.context_queue.append(obs_img)
+            else:
+                self.context_queue.pop(0)
+                self.context_queue.append(obs_img)
+
 
     def _image_cb(self, msg: Image):
 
@@ -410,8 +430,8 @@ def main():
         "--goal-node", "-g", type=int, default=-1, help="Goal node index (-1 = last)"
     )
     parser.add_argument("--waypoint", "-w", type=int, default=2)
-    parser.add_argument("--close-threshold", "-t", type=float, default=0.5)
-    parser.add_argument("--radius", "-r", type=int, default=2)
+    parser.add_argument("--close-threshold", "-t", type=float, default=3)
+    parser.add_argument("--radius", "-r", type=int, default=4)
     parser.add_argument("--num-samples", "-n", type=int, default=8)
 
     args = parser.parse_args()
