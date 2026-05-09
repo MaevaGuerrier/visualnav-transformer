@@ -430,7 +430,7 @@ def main():
         "--goal-node", "-g", type=int, default=-1, help="Goal node index (-1 = last)"
     )
     parser.add_argument("--waypoint", "-w", type=int, default=2)
-    parser.add_argument("--close-threshold", "-t", type=float, default=3)
+    parser.add_argument("--close-threshold", "-t", type=float, default=10)
     parser.add_argument("--radius", "-r", type=int, default=4)
     parser.add_argument("--num-samples", "-n", type=int, default=8)
 
