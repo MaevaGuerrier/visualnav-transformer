@@ -103,6 +103,7 @@ class NavigationNode(Node):
         # Topological map ----------------------------------------------------
         self.topomap, self.goal_node = self._load_topomap(self.args.dir, self.args.goal_node)
         self.closest_node = 0
+        self.last_img_time = 0
 
         self.create_subscription(Image, IMAGE_TOPIC, self._callback_obs_ctrl_rate, 1)
         self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
