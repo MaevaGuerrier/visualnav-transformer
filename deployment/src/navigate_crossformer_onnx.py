@@ -32,6 +32,14 @@ from topic_names import (
     CLOSEST_NODE_TOPIC,
 )
 
+
+# CONSTANT
+WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
+ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
+with open(ROBOT_CONFIG_PATH, "r") as f:
+    ROBOT_CONF = yaml.safe_load(f)
+RATE = ROBOT_CONF["frame_rate"] 
+
 from utils_onnx import msg_to_pil, transform_images, load_model_onnx
 
 def msg_to_pil(msg: Image) -> PILImage.Image:
@@ -99,10 +107,11 @@ class TopomapNavigationController(Node):
         
         # Create subscription
         # print(IMAGE_TOPIC)
+        self.last_img_time = 0
         self.subscription = self.create_subscription(
             Image,
             IMAGE_TOPIC,  # Replace with your actual topic name
-            self._image_cb,
+            self._callback_obs_ctrl_rate,
             qos_profile
         )
         self.waypoint_pub = self.create_publisher(Float32MultiArray, WAYPOINT_TOPIC, 1)
@@ -197,6 +206,23 @@ class TopomapNavigationController(Node):
         model = load_model_onnx("vint")
 
         return model, model_params
+
+    # This make it to match as control frequency
+    def _callback_obs_ctrl_rate(self, msg: Image):
+        
+        current_time = time.time()
+        if current_time - self.last_img_time < 1.0 / RATE:
+            return  # Skip this frame
+        
+        self.last_img_time = current_time
+        
+        obs_img = msg_to_pil(msg)
+        if self.context_size is not None:
+            if len(self.context_queue) < self.context_size + 1:
+                self.context_queue.append(obs_img)
+            else:
+                self.context_queue.pop(0)
+                self.context_queue.append(obs_img)
 
 
     def _image_cb(self, msg: Image):
