@@ -32,13 +32,13 @@ from topic_names import (
     CLOSEST_NODE_TOPIC,
 )
 
-
 # CONSTANT
 WORK_DIR = "/workspace/src/visualnav-transformer/deployment/" # ALWAYS DEPLOY INSIDE DOCKER
 ROBOT_CONFIG_PATH =f"{WORK_DIR}config/robot.yaml"
 with open(ROBOT_CONFIG_PATH, "r") as f:
     ROBOT_CONF = yaml.safe_load(f)
 RATE = ROBOT_CONF["frame_rate"] 
+
 
 from utils_onnx import msg_to_pil, transform_images, load_model_onnx
 
@@ -162,17 +162,20 @@ class TopomapNavigationController(Node):
 
 
     def _setup_model(self):
-        self.model = CrossFormerModel.load_pretrained("hf://rail-berkeley/crossformer")
-        print("loaded crossformer")
-        # # self.model = CrossFormerModel.load_pretrained_local(
-        # #     "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
-        # # )
+        # self.model = CrossFormerModel.load_pretrained("hf://rail-berkeley/crossformer")
+        self.model = CrossFormerModel.load_pretrained("/workspace/src/visualnav-transformer/deployment/model_weights/crossformer")
+
+        # print("loaded crossformer")
+        # self.model = CrossFormerModel.load_pretrained(
+        #     "/root/.cache/huggingface/hub/models--rail-berkeley--crossformer/snapshots/c7dea2691aed3656537c5126a0a77df84a28abd7"
+        # )
         self.unnormalization_statistics = dict(
             (stat_name, stat_value[:4, ...])
             for (stat_name, stat_value) in self.model.dataset_statistics[
                 "omnimimic_gnm_dataset"
             ]["action"].items()
         )
+        # self.model.save_pretrained(9999999999, "/workspace/src/visualnav-transformer/deployment/model_weights/crossformer")
 
     def _load_topomap(self):
         """Load topological map images."""
@@ -223,7 +226,6 @@ class TopomapNavigationController(Node):
             else:
                 self.context_queue.pop(0)
                 self.context_queue.append(obs_img)
-
 
     def _image_cb(self, msg: Image):
         # self.get_logger().info(f'Received image: {msg.width}x{msg.height}')
